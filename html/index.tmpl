@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+{{ if .Prefix }}
+  <title>Index of /{{ .Prefix }}{{ .Name }}</title>
+{{ else }}
+  <title>Index of {{ .Name }}</title>
+{{ end }}
+  <style type="text/css">
+  /*------------------------------------*\
+    Apaxy
+    by @adamwhitcroft
+    Theme name: Apaxy
+    Theme author: @adamwhitcroft
+\*------------------------------------*/
+@import url('//fonts.googleapis.com/css?family=Open+Sans');
+/* Have to use @import for the font, as you can only specify a single stylesheet */
+* {
+	margin:0;
+	padding:0;
+	-webkit-box-sizing:border-box;
+	   -moz-box-sizing:border-box;
+	       box-sizing: border-box; 
+}
+
+html {
+	min-height:100%;
+	color:#61666c;
+	font-weight:400;
+	font-size:1em;
+	font-family:'Open Sans', sans-serif;
+	line-height:2em;
+}
+body {
+	-webkit-backface-visibility:hidden;
+}
+code {
+	font-family:consolas,monospace;	
+}
+a {
+	color:#61666c;
+	text-decoration:none;
+}
+a, img {
+        border:none;
+        outline:none
+}
+a:hover {
+	color:#2a2a2a;
+}
+.header {
+background: #005ea7;
+}
+.panel {
+	background: #003965;
+	max-width: 1000px;
+    margin: 0 auto;
+	margin-top: 20px;
+}
+/*------------------------------------*\
+    Wrapper
+\*------------------------------------*/
+.wrapper {
+	padding: 20px;
+	margin:0 auto;
+	padding-top:40px;
+	max-width:1000px;
+}
+/*------------------------------------*\
+    Demo block
+\*------------------------------------*/
+.block {
+	font-size:.875em;
+	margin:20px 0;
+	padding:20px;
+	color:#9099A3;
+}
+/*------------------------------------*\
+    Table (directory listing)
+\*------------------------------------*/
+table {
+	width:100%;
+	border-collapse:collapse;
+	font-size:.875em;
+}
+tr {
+	outline:0;
+	border:0;
+}
+tr:hover td {
+	background:#f6f6f6;
+}
+th {
+	text-align:left;
+	font-size:.75em;
+	padding-right:20px;
+}
+tr td:first-of-type {
+	padding-left:10px;
+	padding-right:10px;
+}
+td {
+	padding:5px 0;
+	outline:0;
+	border:0;
+	border-bottom:1px solid #edf1f5;
+	vertical-align:middle;
+	text-align:left;
+	-webkit-transition:background 300ms ease;
+	   -moz-transition:background 300ms ease;
+	    -ms-transition:background 300ms ease;
+	     -o-transition:background 300ms ease;
+	        transition:background 300ms ease;
+}
+td a{
+	display: block;
+}
+tr.parent a[href^="/"] {
+	color:#9099A3;
+}
+	.parent a[href^="/"]:hover {
+		color:#2281d0;
+	}
+/*------------------------------------*\
+    Footer
+\*------------------------------------*/
+.footer {
+	text-align:center;
+	font-size:.75em;
+}
+
+.breadcrumb {
+	font-family: 'Exo 2', sans-serif;
+    font-size: 13px;
+    font-weight: bold;
+    overflow: hidden;
+    padding: 0;
+	background: #003965;
+    color: #FFFFFF;
+    border: 1px none;
+    height: 44px;
+    width: 984px;
+  	min-width: 984px;
+}
+
+.breadcrumb .crust {
+    display: block;
+    float: left;
+    position: relative;
+}
+
+.breadcrumb .crust:first-child a.crumb {
+    padding-left: 10px;
+}
+
+.breadcrumb .crust a.crumb, .breadcrumb .crust b.lastcrumb {
+    text-decoration: none;
+    padding: 5px 5px 5px 30px;
+    margin-bottom: -1px;
+    outline: 0 none;
+    display: block;
+    color: #FFFFFF;
+    text-decoration: none;
+	background: #005ea7;
+	transition: all 0.5s ease;
+}
+
+.breadcrumb .crust b.lastcrumb {
+    background: transparent none;
+}
+
+.breadcrumb .crust a.crumb, .breadcrumb .crust b.lastcrumb {
+    line-height: 35px;
+}
+
+.breadcrumb .crust .arrow {
+    border: 22px solid transparent;
+    border-right: 1px none;
+    border-left-color: #003c6d;
+    display: block;
+    position: absolute;
+    right: -22px;
+    top: 0;
+    z-index: 1;
+    width: 0px;
+    height: 0px;
+}
+
+.breadcrumb .crust .arrow span {
+    border: 23px solid transparent;
+    border-right: 1px none black;
+    border-left-color: #005ea7;
+    display: block;
+    position: absolute;
+    left: -24px;
+    top: -23px;
+    z-index: 51;
+    white-space: nowrap;
+    overflow: hidden;
+    text-indent: 9999px;
+    width: 0px;
+    height: 0px;
+	transition: all 0.5s ease;
+}
+
+.breadcrumb .refresh:hover {
+    background-position: 0px -16px;
+}
+
+.breadcrumb .crust:last-child a.crumb {
+}
+
+.breadcrumb .crust:hover a.crumb {
+    text-decoration:none; 
+    cursor: pointer;
+    background: #0076D1;
+	transition: all 0.5s ease;
+}
+
+.breadcrumb .crust:hover .arrow span {
+ 
+    border-left-color: #0076D1;
+	transition: all 0.5s ease;
+}
+  </style>
+</head>
+<body>
+<div class="header">
+{{ if .Prefix }}
+	<img src="/{{ .Prefix }}/static/logo.png" alt="calaos" />
+{{ else }}
+	<img src="/static/logo.png" alt="calaos" />
+{{ end }}
+</div>
+<div class="panel">
+
+<fieldset class="breadcrumb">
+	<span class="crumbs">
+		{{ range .Breadcrumbs }}
+		<span class="crust">
+			<a href="{{ .Path }}" class="crumb">{{ .Name }}</a>
+			<span class="arrow">
+				<span>&gt;</span>
+			</span>
+		</span>
+		{{ end }}
+	</span>
+</fieldset>
+
+</div>
+<div class="wrapper">
+
+<table>
+	<tr>
+		<th>&nbsp;</th>
+		<th>Name</th>
+		<th>Last modified</th>
+		<th>Size</th>
+	</tr>
+	{{ if .ShowParent }}
+	<tr>
+		<td valign="top">
+		{{ if .Prefix }}
+			<img src="/{{ .Prefix }}/static/icons/folder-home.png" alt="dir" />
+		{{ else }}
+			<img src="/static/icons/folder-home.png" alt="dir" />
+		{{ end }}</td>
+		<td><a href="../">Parent Directory</a></td>
+		<td>&nbsp;</td>
+		<td>&nbsp;</td>
+	</tr>
+	{{ end }}
+	{{ range .Folders }}
+	<tr>
+		<td valign="top">
+		{{ if .Prefix }}
+			<img src="/{{ .Prefix }}/static/icons/{{ .Icon }}" alt="folder" />
+		{{ else }}
+			<img src="/static/icons/{{ .Icon }}" alt="folder" />
+		{{ end }}</td>
+		<td><a href="{{ .Name }}/">{{ .Name }}/</a></td>
+		<td align="right">&nbsp;</td>
+		<td align="right">&nbsp;</td>
+	</tr>
+	{{ end }}
+	{{ range .Files }}
+	<tr>
+		<td valign="top">
+		{{ if .Prefix }}
+			<img src="/{{ .Prefix }}/static/icons/{{ .Icon }}" alt="icon" />
+		{{ else }}
+			<img src="/static/icons/{{ .Icon }}" alt="icon" />
+		{{ end }}</td>
+		<td><a href="{{ .Name }}">{{ .Name }}</a></td>
+		<td align="right">{{ .ModifiedDate }}</td>
+		<td align="right">{{ .Size }}</td>
+	</tr>
+	{{ end }}
+</table>
+
+</div>
+<script src="//ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+<script>
+$('tr:nth-child(2)').addClass('parent');
+</script>
+</body></html>
