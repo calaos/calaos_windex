@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"container/list"
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -18,10 +21,7 @@ import (
 )
 
 var (
-	root_folder string
-	tmpl_folder string
-	prefix      string
-	ga_id       string
+	configJson Config
 )
 
 const (
@@ -37,12 +37,20 @@ var CmdServe = cli.Command{
 	Description: "This command serves an http index from a folder",
 	Action:      serve,
 	Flags: []cli.Flag{
-		stringFlag("prefix", "", "Subfolder when using a HTTP proxy"),
-		stringFlag("root", "/var/www", "The folder to serve"),
-		stringFlag("ga_id", "UA-XXXXXXXX-Y", "Google analytics ID"),
-		intFlag("port", 9696, "HTTP port to listen to"),
-		stringFlag("template_dir", "./html", "The folder to look for index.tmpl"),
+		stringFlag("config", "calaos.json", "The config file"),
 	},
+}
+
+type Config struct {
+	ProxyPrefix       string `json:"proxy_prefix"`
+	RootFolder        string `json:"root_folder"`
+	GoogleAnalyticsId string `json:"google_analytics_id"`
+	Port              int    `json:"port"`
+	TemplateDir       string `json:"template_dir"`
+	UploadConfig      []struct {
+		Subfolder string `json:"subfolder"`
+		Key       string `json:"key"`
+	} `json:"upload_config"`
 }
 
 type FileItem struct {
@@ -68,30 +76,41 @@ type DirListing struct {
 }
 
 func serve(c *cli.Context) (err error) {
-	root_folder = c.String("root")
-	tmpl_folder = c.String("template_dir")
-	prefix = c.String("prefix")
-	ga_id = c.String("ga_id")
-	if tmpl_folder[0] == '.' {
+	jconf := c.String("config")
+	cfile, err := ioutil.ReadFile(jconf)
+	if err != nil {
+		log.Printf("Reading config file error: %v\n", err)
+		return err
+	}
+
+	if err = json.Unmarshal(cfile, &configJson); err != nil {
+		log.Printf("Unmarshal config file error: %v\n", err)
+		return err
+	}
+
+	if configJson.TemplateDir[0] == '.' {
 		curr, err := os.Getwd()
 		if err != nil {
 			panic(err)
 		}
-		tmpl_folder = path.Join(curr, tmpl_folder)
+		configJson.TemplateDir = path.Join(curr, configJson.TemplateDir)
 	}
 
-	if err = os.Chdir(root_folder); err != nil {
+	if err = os.Chdir(configJson.RootFolder); err != nil {
+		log.Printf("Can't chdir to root_folder: %v\n", err)
 		return err
 	}
 
-	port := c.Int("port")
+	if configJson.Port == 0 {
+		configJson.Port = 9696
+	}
 
-	fmt.Println(Arrow, " Starting HTTP server, on port", port)
+	fmt.Println(Arrow, " Starting HTTP server ( root: ", configJson.RootFolder, "), on port", configJson.Port)
 
-	http.Handle("/", http.FileServer(http.Dir(root_folder)))
+	http.Handle("/", http.FileServer(http.Dir(configJson.RootFolder)))
 	handler := buildHttpHandler()
 
-	err = http.ListenAndServe(":"+strconv.Itoa(port), handler)
+	err = http.ListenAndServe(":"+strconv.Itoa(configJson.Port), handler)
 
 	return err
 }
@@ -101,6 +120,7 @@ func buildHttpHandler() http.Handler {
 
 	handler = http.DefaultServeMux
 	handler = fileHandler(handler)
+	handler = uploadHandler(handler)
 	handler = proxyPrefix(handler)
 	handler = logHandler(handler)
 
@@ -109,11 +129,11 @@ func buildHttpHandler() http.Handler {
 
 func proxyPrefix(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if prefix != "" {
-			if r.URL.Path == "/"+prefix {
-				http.Redirect(w, r, "/"+prefix+"/", http.StatusFound)
+		if configJson.ProxyPrefix != "" {
+			if r.URL.Path == "/"+configJson.ProxyPrefix {
+				http.Redirect(w, r, "/"+configJson.ProxyPrefix+"/", http.StatusFound)
 			} else {
-				http.StripPrefix("/"+prefix, handler).ServeHTTP(w, r)
+				http.StripPrefix("/"+configJson.ProxyPrefix, handler).ServeHTTP(w, r)
 			}
 		} else {
 			handler.ServeHTTP(w, r)
@@ -128,16 +148,91 @@ func logHandler(handler http.Handler) http.Handler {
 	})
 }
 
+func uploadHandler(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+
+		if req.Method != "POST" && !strings.HasPrefix(req.URL.Path, "/upload") {
+			//Use default go serve handler
+			handler.ServeHTTP(w, req)
+			return
+		}
+		w.Header().Set("Server", serverUA)
+
+		log.Printf("Handling file upload.")
+
+		formKey := req.FormValue("upload_key")
+		formSha1 := req.FormValue("upload_sha1")
+		formFolder := req.FormValue("upload_folder")
+
+		log.Printf("Checking key authorization...")
+
+		found := false
+		uploadPath := ""
+		for _, k := range configJson.UploadConfig {
+			if k.Key == formKey {
+				found = true
+				uploadPath = k.Subfolder
+				break
+			}
+		}
+		if !found {
+			log.Printf("No autorized key (%v) found in config. Access refused.\n", formKey)
+			http.Error(w, "403 Forbidden", 403)
+			return
+		}
+
+		log.Printf("Uploading info:\n\tkey: %v\n\tsha1: %v\n\tfolder: %v\n", formKey, formSha1, formFolder)
+
+		req.ParseMultipartForm(32 << 20)
+		file, h, err := req.FormFile("upload_file")
+		if err != nil {
+			http.Error(w, "500 Internal Error: Error while opening the file.", 500)
+			log.Printf("Error getting file %v\n", err)
+			return
+		}
+		defer file.Close()
+
+		filepath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), h.Filename)
+		log.Printf("Saving file to: %v\n", filepath)
+		err = os.MkdirAll(path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), os.ModePerm)
+		if err != nil {
+			http.Error(w, "500 Internal Error: Error while creating folder.", 500)
+			log.Printf("Error creating folder %v\n", err)
+			return
+		}
+
+		if _, err := os.Stat(filepath); err == nil {
+			http.Error(w, "403 File exists.", 403)
+			log.Printf("Error file exists already. Not overwriting. %v\n", filepath)
+			return
+		}
+
+		f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE, 0666)
+		if err != nil {
+			http.Error(w, "500 Internal Error: Error while opening the file.", 500)
+			log.Printf("Error opening file %v\n", err)
+			return
+		}
+		defer f.Close()
+		io.Copy(f, file)
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(201)
+		fmt.Fprintln(w, "File created")
+	})
+}
+
 func fileHandler(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Server", serverUA)
 
 		if strings.HasPrefix(req.URL.Path, "/static") {
-			http.StripPrefix("/static/", http.FileServer(http.Dir(tmpl_folder))).ServeHTTP(w, req)
+			http.StripPrefix("/static/", http.FileServer(http.Dir(configJson.TemplateDir))).ServeHTTP(w, req)
 			return
 		}
 
-		filepath := path.Join(root_folder, path.Clean(req.URL.Path))
+		filepath := path.Join(configJson.RootFolder, path.Clean(req.URL.Path))
 
 		f, err := os.Open(filepath)
 		if err != nil {
@@ -187,22 +282,22 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 	data := DirListing{
 		Name:       req.URL.Path,
 		ShowParent: true,
-		Prefix:     prefix,
+		Prefix:     configJson.ProxyPrefix,
 	}
-	if f.Name() == root_folder {
+	if f.Name() == configJson.RootFolder {
 		data.ShowParent = false
 	}
 
 	//Fill breadcrumbs
 	var p, bpath string
-	if prefix != "" {
+	if configJson.ProxyPrefix != "" {
 		data.Breadcrumbs = append(data.Breadcrumbs, Breadcrumb{
-			Name: prefix,
-			Path: "/" + prefix + "/",
+			Name: configJson.ProxyPrefix,
+			Path: "/" + configJson.ProxyPrefix + "/",
 		})
-		p = strings.TrimPrefix(req.URL.Path, "/"+prefix+"/")
+		p = strings.TrimPrefix(req.URL.Path, "/"+configJson.ProxyPrefix+"/")
 		p = strings.Trim(req.URL.Path, "/")
-		bpath = "/" + prefix
+		bpath = "/" + configJson.ProxyPrefix
 	} else {
 		data.Breadcrumbs = append(data.Breadcrumbs, Breadcrumb{
 			Name: "Root",
@@ -243,7 +338,7 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 		data.Folders[i] = FileItem{
 			Name:   e.Value.(string),
 			Icon:   "folder.png",
-			Prefix: prefix,
+			Prefix: configJson.ProxyPrefix,
 		}
 	}
 
@@ -253,7 +348,7 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 		data.Files[i] = createFileItem(f.Name(), e.Value.(string))
 	}
 
-	t, err := template.ParseFiles(path.Join(tmpl_folder, "index.tmpl"))
+	t, err := template.ParseFiles(path.Join(configJson.TemplateDir, "index.tmpl"))
 	if err != nil {
 		http.Error(w, "500 Internal Error : Error while generating directory listing. ", 500)
 		log.Printf("Error parsing template file %v\n", err)
@@ -266,7 +361,7 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 func createFileItem(folder string, filename string) (fi FileItem) {
 	fi = FileItem{
 		Name:   filename,
-		Prefix: prefix,
+		Prefix: configJson.ProxyPrefix,
 	}
 
 	file, err := os.Open(path.Join(folder, filename))
@@ -395,7 +490,7 @@ func createFileItem(folder string, filename string) (fi FileItem) {
 
 func SendAnalyticsData(filename string) {
 	log.Println("Sending data to Analytics for file", filename)
-	client, err := ga.NewClient(ga_id)
+	client, err := ga.NewClient(configJson.GoogleAnalyticsId)
 	if err != nil {
 		log.Println("ERROR, failed to create GA client!")
 		return

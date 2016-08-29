@@ -1,0 +1,13 @@
+{
+	"proxy_prefix": "",
+	"root_folder": "D:\\qt5",
+	"google_analytics_id": "ga-xxx",
+	"port": 9696,
+	"template_dir": "./html",
+	
+	"upload_config": [
+	{
+		"subfolder": "mysub1",
+		"key": "1234"
+	}]
+}
