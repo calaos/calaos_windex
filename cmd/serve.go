@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"container/list"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -161,7 +163,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 		log.Printf("Handling file upload.")
 
 		formKey := req.FormValue("upload_key")
-		formSha1 := req.FormValue("upload_sha1")
+		formSha256 := req.FormValue("upload_sha256")
 		formFolder := req.FormValue("upload_folder")
 
 		log.Printf("Checking key authorization...")
@@ -181,7 +183,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 			return
 		}
 
-		log.Printf("Uploading info:\n\tkey: %v\n\tsha1: %v\n\tfolder: %v\n", formKey, formSha1, formFolder)
+		log.Printf("Uploading info:\n\tkey: %v\n\tsha256: %v\n\tfolder: %v\n", formKey, formSha256, formFolder)
 
 		req.ParseMultipartForm(32 << 20)
 		file, h, err := req.FormFile("upload_file")
@@ -207,6 +209,26 @@ func uploadHandler(handler http.Handler) http.Handler {
 			return
 		}
 
+		tmpfile, err := ioutil.TempFile(os.TempDir(), "windex_upload")
+		defer os.Remove(tmpfile.Name())
+		io.Copy(tmpfile, file)
+		tmpfile.Seek(0, 0)
+
+		if formSha256 != "" {
+			//Check SHA256
+			hasher := sha256.New()
+			io.Copy(hasher, tmpfile)
+			sha := hex.EncodeToString(hasher.Sum(nil))
+
+			if formSha256 != sha {
+				http.Error(w, "400 Bad checksum: SHA256 failed.", 400)
+				log.Printf("Wrong sha256 %v != %v\n", formSha256, sha)
+				return
+			}
+
+			tmpfile.Seek(0, 0)
+		}
+
 		f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE, 0666)
 		if err != nil {
 			http.Error(w, "500 Internal Error: Error while opening the file.", 500)
@@ -214,7 +236,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 			return
 		}
 		defer f.Close()
-		io.Copy(f, file)
+		io.Copy(f, tmpfile)
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
