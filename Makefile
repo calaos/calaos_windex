@@ -1,5 +1,5 @@
 
-APPNAME = windex
+APPNAME = calaos_windex
 
 TAGS = ""
 BUILD_FLAGS = "-v"
