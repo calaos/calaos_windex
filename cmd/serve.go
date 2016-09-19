@@ -14,8 +14,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/dustin/go-humanize"
 	"github.com/jpillora/go-ogle-analytics"
@@ -75,6 +77,43 @@ type DirListing struct {
 	Folders     []FileItem
 	Files       []FileItem
 	Breadcrumbs []Breadcrumb
+}
+
+type ByCase []FileItem
+
+func (s ByCase) Len() int {
+	return len(s)
+}
+func (s ByCase) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
+}
+func (s ByCase) Less(i, j int) bool {
+	iRunes := []rune(s[i].Name)
+	jRunes := []rune(s[j].Name)
+
+	max := len(iRunes)
+	if max > len(jRunes) {
+		max = len(jRunes)
+	}
+
+	for idx := 0; idx < max; idx++ {
+		ir := iRunes[idx]
+		jr := jRunes[idx]
+
+		lir := unicode.ToLower(ir)
+		ljr := unicode.ToLower(jr)
+
+		if lir != ljr {
+			return lir < ljr
+		}
+
+		// the lowercase runes are the same, so compare the original
+		if ir != jr {
+			return ir < jr
+		}
+	}
+
+	return false
 }
 
 func serve(c *cli.Context) (err error) {
@@ -363,12 +402,14 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 			Prefix: configJson.ProxyPrefix,
 		}
 	}
+	sort.Sort(ByCase(data.Folders))
 
 	//prepare file info
 	data.Files = make([]FileItem, files_tmp.Len())
 	for i, e := 0, files_tmp.Front(); e != nil; i, e = i+1, e.Next() {
 		data.Files[i] = createFileItem(f.Name(), e.Value.(string))
 	}
+	sort.Sort(ByCase(data.Files))
 
 	t, err := template.ParseFiles(path.Join(configJson.TemplateDir, "index.tmpl"))
 	if err != nil {
