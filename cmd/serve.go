@@ -204,6 +204,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 		formKey := req.FormValue("upload_key")
 		formSha256 := req.FormValue("upload_sha256")
 		formFolder := req.FormValue("upload_folder")
+		formReplace := req.FormValue("upload_replace")
 
 		log.Printf("Checking key authorization...")
 
@@ -242,10 +243,12 @@ func uploadHandler(handler http.Handler) http.Handler {
 			return
 		}
 
-		if _, err := os.Stat(filepath); err == nil {
-			http.Error(w, "403 File exists.", 403)
-			log.Printf("Error file exists already. Not overwriting. %v\n", filepath)
-			return
+		if formReplace != "true" {
+			if _, err := os.Stat(filepath); err == nil {
+				http.Error(w, "403 File exists.", 403)
+				log.Printf("Error file exists already. Not overwriting. %v\n", filepath)
+				return
+			}
 		}
 
 		tmpfile, err := ioutil.TempFile(os.TempDir(), "windex_upload")
