@@ -243,11 +243,13 @@ func uploadHandler(handler http.Handler) http.Handler {
 			return
 		}
 
-		if formReplace != "true" {
-			if _, err := os.Stat(filepath); err == nil {
+		if _, err := os.Stat(filepath); err == nil {
+			if formReplace != "true" {
 				http.Error(w, "403 File exists.", 403)
 				log.Printf("Error file exists already. Not overwriting. %v\n", filepath)
 				return
+			} else {
+				os.Remove(filepath)
 			}
 		}
 
