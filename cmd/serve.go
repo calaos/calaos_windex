@@ -234,6 +234,10 @@ func uploadHandler(handler http.Handler) http.Handler {
 		}
 		defer file.Close()
 
+		if req.MultipartForm {
+			defer req.MultipartForm.RemoveAll()
+		}
+
 		filepath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), h.Filename)
 		log.Printf("Saving file to: %v\n", filepath)
 		err = os.MkdirAll(path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), os.ModePerm)
