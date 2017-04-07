@@ -234,7 +234,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 		}
 		defer file.Close()
 
-		if req.MultipartForm {
+		if req.MultipartForm != nil {
 			defer req.MultipartForm.RemoveAll()
 		}
 
