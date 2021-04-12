@@ -167,9 +167,9 @@ func buildHttpHandler() http.Handler {
 	var handler http.Handler
 
 	handler = http.DefaultServeMux
-	handler = apiHandler(handler)
 	handler = fileHandler(handler)
 	handler = uploadHandler(handler)
+	handler = apiHandler(handler)
 	handler = proxyPrefix(handler)
 	handler = logHandler(handler)
 
@@ -200,7 +200,7 @@ func logHandler(handler http.Handler) http.Handler {
 func uploadHandler(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 
-		if req.Method != "POST" && !strings.HasPrefix(req.URL.Path, "/upload") {
+		if req.Method != "POST" || !strings.HasPrefix(req.URL.Path, "/upload") {
 			//Use default go serve handler
 			handler.ServeHTTP(w, req)
 			return
