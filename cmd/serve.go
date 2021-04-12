@@ -20,7 +20,7 @@ import (
 	"unicode"
 
 	"github.com/dustin/go-humanize"
-	"github.com/jpillora/go-ogle-analytics"
+	ga "github.com/jpillora/go-ogle-analytics"
 	"github.com/urfave/cli"
 )
 
@@ -29,7 +29,7 @@ var (
 )
 
 const (
-	serverUA = "Calaos-WIndex/1.0"
+	serverUA = "Calaos-WIndex/2.0"
 
 	Arrow = "\u2012\u25b6"
 	Star  = "\u2737"
@@ -55,6 +55,11 @@ type Config struct {
 		Subfolder string `json:"subfolder"`
 		Key       string `json:"key"`
 	} `json:"upload_config"`
+	ApiConfig []struct {
+		Folder      string `json:"folder"`       //the calaos-os folder
+		ReleaseType string `json:"release_type"` //can be one of: stable/experimental
+		Machine     string `json:"machine"`      //can be: x86-64, raspberrypi, rasperrypi0, rasperrypi2, rasperrypi3, rasperrypi4
+	} `json:"api_config"`
 }
 
 type FileItem struct {
@@ -146,6 +151,8 @@ func serve(c *cli.Context) (err error) {
 		configJson.Port = 9696
 	}
 
+	ScanForReleases()
+
 	fmt.Println(Arrow, " Starting HTTP server ( root: ", configJson.RootFolder, "), on port", configJson.Port)
 
 	http.Handle("/", http.FileServer(http.Dir(configJson.RootFolder)))
@@ -160,6 +167,7 @@ func buildHttpHandler() http.Handler {
 	var handler http.Handler
 
 	handler = http.DefaultServeMux
+	handler = apiHandler(handler)
 	handler = fileHandler(handler)
 	handler = uploadHandler(handler)
 	handler = proxyPrefix(handler)
@@ -290,6 +298,8 @@ func uploadHandler(handler http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(201)
 		fmt.Fprintln(w, "File created")
+
+		go ScanForReleases()
 	})
 }
 

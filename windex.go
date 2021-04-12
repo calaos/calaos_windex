@@ -16,7 +16,7 @@ func main() {
 	app := cli.NewApp()
 	app.Name = "Windex HTTP file index"
 	app.Usage = "List, serve and track file download"
-	app.Version = "1.0"
+	app.Version = "2.0"
 	app.Commands = []cli.Command{
 		cmd.CmdServe,
 	}
