@@ -52,7 +52,9 @@ type Config struct {
 	GoogleAnalyticsId string `json:"google_analytics_id"`
 	Port              int    `json:"port"`
 	TemplateDir       string `json:"template_dir"`
-	UploadConfig      []struct {
+	RepoTool          string `json:"repo_tool"`
+
+	UploadConfig []struct {
 		Subfolder string `json:"subfolder"`
 		Key       string `json:"key"`
 	} `json:"upload_config"`
@@ -638,19 +640,26 @@ func SendAnalyticsData(filename string) {
 
 func startRepoTool(w io.Writer, folder string, pkgName string, repo string) (err error) {
 	repoTool := "/usr/bin/repo-add"
+	if configJson.RepoTool != "" {
+		repoTool = configJson.RepoTool
+	}
 
-	log.Println("Starting repo-add: pkg=", pkgName, "folder=", folder)
+	log.Println("Starting ", repoTool, ": pkg=", pkgName, "folder=", folder)
 
 	pathToDb := path.Join(folder, repo+".db.tar.gz")
 	pkg := path.Join(folder, pkgName)
 
-	cmd := exec.Command(repoTool,
+	args := []string{
 		"--remove", //remove old package file from disk after updating database
 		"--nocolor",
 		"--sign",   //sign database with GnuPG after update
 		"--verify", //verify database's signature before update
 		pathToDb,
-		pkg)
+		pkg}
+
+	log.Println("with args:", args)
+
+	cmd := exec.Command(repoTool, args...)
 
 	cmd.Stdout = w
 	cmd.Stderr = w
