@@ -215,6 +215,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 		formFolder := req.FormValue("upload_folder")
 		formReplace := req.FormValue("upload_replace")
 		formUpdateRepo := req.FormValue("upload_update_repo")
+		formRepo := req.FormValue("upload_repo")
 
 		log.Printf("Checking key authorization...")
 
@@ -336,7 +337,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 		}
 
 		if formUpdateRepo == "true" {
-			err = startRepoTool(w, path.Join(configJson.RootFolder, path.Clean(uploadPath)), h.Filename)
+			err = startRepoTool(w, path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), h.Filename, formRepo)
 			if err != nil {
 				http.Error(w, "500 Internal Error: Error while adding package to repo.", http.StatusInternalServerError)
 				log.Printf("Failed to add package to repo\n")
@@ -635,12 +636,12 @@ func SendAnalyticsData(filename string) {
 
 }
 
-func startRepoTool(w io.Writer, folder string, pkgName string) (err error) {
+func startRepoTool(w io.Writer, folder string, pkgName string, repo string) (err error) {
 	repoTool := "/usr/bin/repo-add"
 
 	log.Println("Starting repo-add: pkg=", pkgName, "folder=", folder)
 
-	pathToDb := path.Join(folder, "calaos.db.tar.gz")
+	pathToDb := path.Join(folder, repo+".db.tar.gz")
 	pkg := path.Join(folder, pkgName)
 
 	cmd := exec.Command(repoTool,
