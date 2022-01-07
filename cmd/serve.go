@@ -325,7 +325,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 
 			tmpfile, _ := ioutil.TempFile(os.TempDir(), "windex_upload_sig")
 			defer os.Remove(tmpfile.Name())
-			io.Copy(tmpfile, file)
+			io.Copy(tmpfile, fileSig)
 			tmpfile.Seek(0, 0)
 
 			f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE, 0666)
