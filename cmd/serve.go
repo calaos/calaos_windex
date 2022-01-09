@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/dustin/go-humanize"
@@ -639,7 +640,13 @@ func SendAnalyticsData(filename string) {
 
 }
 
+var repoToolMutex sync.Mutex
+
 func startRepoTool(w io.Writer, folder string, pkgName string, repo string) (err error) {
+	//Prevent repo-add tool to run at the same time. It can corrupt the db and signature
+	repoToolMutex.Lock()
+	defer repoToolMutex.Unlock()
+
 	repoTool := "/usr/bin/repo-add"
 	if configJson.RepoTool != "" {
 		repoTool = configJson.RepoTool
