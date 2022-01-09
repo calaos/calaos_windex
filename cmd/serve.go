@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
@@ -661,12 +662,20 @@ func startRepoTool(w io.Writer, folder string, pkgName string, repo string) (err
 
 	cmd := exec.Command(repoTool, args...)
 
-	cmd.Stdout = w
-	cmd.Stderr = w
+	var buff bytes.Buffer
+	multi := io.MultiWriter(w, os.Stdout, &buff)
+
+	cmd.Stdout = multi
+	cmd.Stderr = multi
 
 	err = cmd.Run()
 	if err != nil {
 		log.Println("ERROR:", err)
+	}
+
+	//Check if there were any warnings about signature
+	if strings.Contains(buff.String(), "Failed to sign package database file") {
+		return fmt.Errorf("failed to sign package database file")
 	}
 
 	return
