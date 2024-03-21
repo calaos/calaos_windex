@@ -1,16 +1,21 @@
 package cmd
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/blake2b"
 )
 
 type JSONTime time.Time
@@ -22,6 +27,8 @@ type ReleaseFile struct {
 	ReleaseType string   `json:"release_type"`
 	Version     string   `json:"version"`
 	Date        JSONTime `json:"release_date"`
+	Filesize    int64    `json:"filesize"`
+	Checksum    string   `json:"hash_blake2b"`
 }
 
 type JSONMarshaler interface {
@@ -93,6 +100,8 @@ func ScanForReleases() {
 					ReleaseType: apiItem.ReleaseType,
 					Date:        JSONTime(f.ModTime()),
 					Version:     extractVersion(f.Name()),
+					Filesize:    f.Size(),
+					Checksum:    computeBlakeHash(filepath.Join(d, f.Name())),
 				}
 
 				rel = append(rel, r)
@@ -124,4 +133,23 @@ func extractVersion(fname string) (vers string) {
 	}
 
 	return "unknown"
+}
+
+func computeBlakeHash(fname string) string {
+	hasher, _ := blake2b.New256(nil)
+
+	f, err := os.Open(fname)
+	if err != nil {
+		log.Println("checksum: Failed to open file", err)
+		return ""
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(hasher, f); err != nil {
+		log.Println("checksum: Failed to hash file", err)
+		return ""
+	}
+
+	hash := hasher.Sum(nil)
+	return hex.EncodeToString(hash[:])
 }
