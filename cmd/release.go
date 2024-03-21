@@ -69,7 +69,7 @@ func apiHandler(handler http.Handler) http.Handler {
 	})
 }
 
-//ScanForReleases walk through all folder, search calaos-os image files and populates releaseCache
+// ScanForReleases walk through all folder, search calaos-os image files and populates releaseCache
 func ScanForReleases() {
 	log.Println("ScanForReleases...")
 	var rel []*ReleaseFile
@@ -89,6 +89,7 @@ func ScanForReleases() {
 				strings.HasSuffix(f.Name(), ".tar.bz2") ||
 				strings.HasSuffix(f.Name(), ".hddimg") ||
 				strings.HasSuffix(f.Name(), ".hddimg.xz") ||
+				strings.HasSuffix(f.Name(), ".hddimg.zst") ||
 				strings.HasSuffix(f.Name(), ".rpi-sdimg") ||
 				strings.HasSuffix(f.Name(), "sdimg") ||
 				strings.HasSuffix(f.Name(), ".rpi-sdimg.xz") {
@@ -117,17 +118,11 @@ func ScanForReleases() {
 }
 
 var (
-	regStable = regexp.MustCompile(`.*(v\d.\d)`)
-	regDev    = regexp.MustCompile(`.*(v\d.\d-[a-z0-9]+-\d{0,3}-[a-z0-9]{8})`)
+	regVer = regexp.MustCompile(`.*v((?:\d\.\d\.\d|\d\.\d)(?:-(?:alpha|rc)[\.]{0,1}\d+)?(?:-\d+)?(?:-g[a-f0-9]+)?(?:-\d{8})?)`)
 )
 
 func extractVersion(fname string) (vers string) {
-	match := regDev.FindStringSubmatch(fname)
-	if len(match) >= 2 {
-		return match[1]
-	}
-
-	match = regStable.FindStringSubmatch(fname)
+	match := regVer.FindStringSubmatch(fname)
 	if len(match) >= 2 {
 		return match[1]
 	}

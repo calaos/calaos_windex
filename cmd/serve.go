@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,11 +13,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/dustin/go-humanize"
@@ -51,7 +54,9 @@ type Config struct {
 	GoogleAnalyticsId string `json:"google_analytics_id"`
 	Port              int    `json:"port"`
 	TemplateDir       string `json:"template_dir"`
-	UploadConfig      []struct {
+	RepoTool          string `json:"repo_tool"`
+
+	UploadConfig []struct {
 		Subfolder string `json:"subfolder"`
 		Key       string `json:"key"`
 	} `json:"upload_config"`
@@ -213,6 +218,8 @@ func uploadHandler(handler http.Handler) http.Handler {
 		formSha256 := req.FormValue("upload_sha256")
 		formFolder := req.FormValue("upload_folder")
 		formReplace := req.FormValue("upload_replace")
+		formUpdateRepo := req.FormValue("upload_update_repo")
+		formRepo := req.FormValue("upload_repo")
 
 		log.Printf("Checking key authorization...")
 
@@ -227,7 +234,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 		}
 		if !found {
 			log.Printf("No autorized key (%v) found in config. Access refused.\n", formKey)
-			http.Error(w, "403 Forbidden", 403)
+			http.Error(w, "403 Forbidden", http.StatusForbidden)
 			return
 		}
 
@@ -236,7 +243,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 		req.ParseMultipartForm(32 << 20)
 		file, h, err := req.FormFile("upload_file")
 		if err != nil {
-			http.Error(w, "500 Internal Error: Error while opening the file.", 500)
+			http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
 			log.Printf("Error getting file %v\n", err)
 			return
 		}
@@ -250,14 +257,14 @@ func uploadHandler(handler http.Handler) http.Handler {
 		log.Printf("Saving file to: %v\n", filepath)
 		err = os.MkdirAll(path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), os.ModePerm)
 		if err != nil {
-			http.Error(w, "500 Internal Error: Error while creating folder.", 500)
+			http.Error(w, "500 Internal Error: Error while creating folder.", http.StatusInternalServerError)
 			log.Printf("Error creating folder %v\n", err)
 			return
 		}
 
 		if _, err := os.Stat(filepath); err == nil {
 			if formReplace != "true" {
-				http.Error(w, "403 File exists.", 403)
+				http.Error(w, "403 File exists.", http.StatusForbidden)
 				log.Printf("Error file exists already. Not overwriting. %v\n", filepath)
 				return
 			} else {
@@ -265,7 +272,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 			}
 		}
 
-		tmpfile, err := ioutil.TempFile(os.TempDir(), "windex_upload")
+		tmpfile, _ := ioutil.TempFile(os.TempDir(), "windex_upload")
 		defer os.Remove(tmpfile.Name())
 		io.Copy(tmpfile, file)
 		tmpfile.Seek(0, 0)
@@ -277,7 +284,7 @@ func uploadHandler(handler http.Handler) http.Handler {
 			sha := hex.EncodeToString(hasher.Sum(nil))
 
 			if formSha256 != sha {
-				http.Error(w, "400 Bad checksum: SHA256 failed.", 400)
+				http.Error(w, "400 Bad checksum: SHA256 failed.", http.StatusBadRequest)
 				log.Printf("Wrong sha256 %v != %v\n", formSha256, sha)
 				return
 			}
@@ -287,16 +294,64 @@ func uploadHandler(handler http.Handler) http.Handler {
 
 		f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE, 0666)
 		if err != nil {
-			http.Error(w, "500 Internal Error: Error while opening the file.", 500)
+			http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
 			log.Printf("Error opening file %v\n", err)
 			return
 		}
 		defer f.Close()
 		io.Copy(f, tmpfile)
 
+		//Save signature file if it exists
+		_, hasSignature := req.MultipartForm.File["upload_file_sig"]
+		if hasSignature {
+			fileSig, hSig, err := req.FormFile("upload_file_sig")
+			if err != nil {
+				http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
+				log.Printf("Error getting file %v\n", err)
+				return
+			}
+			defer fileSig.Close()
+
+			filepath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), hSig.Filename)
+			log.Printf("Saving file to: %v\n", filepath)
+
+			if _, err := os.Stat(filepath); err == nil {
+				if formReplace != "true" {
+					http.Error(w, "403 File exists.", http.StatusForbidden)
+					log.Printf("Error file exists already. Not overwriting. %v\n", filepath)
+					return
+				} else {
+					os.Remove(filepath)
+				}
+			}
+
+			tmpfile, _ := ioutil.TempFile(os.TempDir(), "windex_upload_sig")
+			defer os.Remove(tmpfile.Name())
+			io.Copy(tmpfile, fileSig)
+			tmpfile.Seek(0, 0)
+
+			f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE, 0666)
+			if err != nil {
+				http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
+				log.Printf("Error opening file %v\n", err)
+				return
+			}
+			defer f.Close()
+			io.Copy(f, tmpfile)
+		}
+
+		if formUpdateRepo == "true" {
+			err = startRepoTool(w, path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), h.Filename, formRepo)
+			if err != nil {
+				http.Error(w, "500 Internal Error: Error while adding package to repo.", http.StatusInternalServerError)
+				log.Printf("Failed to add package to repo\n")
+				return
+			}
+		}
+
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(201)
+		w.WriteHeader(http.StatusCreated)
 		fmt.Fprintln(w, "File created")
 
 		go ScanForReleases()
@@ -375,7 +430,6 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 			Name: configJson.ProxyPrefix,
 			Path: "/" + configJson.ProxyPrefix + "/",
 		})
-		p = strings.TrimPrefix(req.URL.Path, "/"+configJson.ProxyPrefix+"/")
 		p = strings.Trim(req.URL.Path, "/")
 		bpath = "/" + configJson.ProxyPrefix
 	} else {
@@ -584,4 +638,52 @@ func SendAnalyticsData(filename string) {
 		return
 	}
 
+}
+
+var repoToolMutex sync.Mutex
+
+func startRepoTool(w io.Writer, folder string, pkgName string, repo string) (err error) {
+	//Prevent repo-add tool to run at the same time. It can corrupt the db and signature
+	repoToolMutex.Lock()
+	defer repoToolMutex.Unlock()
+
+	repoTool := "/usr/bin/repo-add"
+	if configJson.RepoTool != "" {
+		repoTool = configJson.RepoTool
+	}
+
+	log.Println("Starting ", repoTool, ": pkg=", pkgName, "folder=", folder)
+
+	pathToDb := path.Join(folder, repo+".db.tar.gz")
+	pkg := path.Join(folder, pkgName)
+
+	args := []string{
+		"--remove", //remove old package file from disk after updating database
+		"--nocolor",
+		"--sign",   //sign database with GnuPG after update
+		"--verify", //verify database's signature before update
+		pathToDb,
+		pkg}
+
+	log.Println("with args:", args)
+
+	cmd := exec.Command(repoTool, args...)
+
+	var buff bytes.Buffer
+	multi := io.MultiWriter(w, os.Stdout, &buff)
+
+	cmd.Stdout = multi
+	cmd.Stderr = multi
+
+	err = cmd.Run()
+	if err != nil {
+		log.Println("ERROR:", err)
+	}
+
+	//Check if there were any warnings about signature
+	if strings.Contains(buff.String(), "Failed to sign package database file") {
+		return fmt.Errorf("failed to sign package database file")
+	}
+
+	return
 }
