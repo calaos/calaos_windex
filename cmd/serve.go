@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/dustin/go-humanize"
@@ -73,6 +74,7 @@ type FileItem struct {
 	Size         string
 	ModifiedDate string
 	Prefix       string
+	CreatedTime  time.Time
 }
 
 type Breadcrumb struct {
@@ -124,6 +126,18 @@ func (s ByCase) Less(i, j int) bool {
 	}
 
 	return false
+}
+
+type ByCreationTime []FileItem
+
+func (s ByCreationTime) Len() int {
+	return len(s)
+}
+func (s ByCreationTime) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
+}
+func (s ByCreationTime) Less(i, j int) bool {
+	return s[i].CreatedTime.After(s[j].CreatedTime) // Newer files first
 }
 
 func serve(c *cli.Context) (err error) {
@@ -482,7 +496,7 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 	for i, e := 0, files_tmp.Front(); e != nil; i, e = i+1, e.Next() {
 		data.Files[i] = createFileItem(f.Name(), e.Value.(string))
 	}
-	sort.Sort(ByCase(data.Files))
+	sort.Sort(ByCreationTime(data.Files))
 
 	t, err := template.ParseFiles(path.Join(configJson.TemplateDir, "index.tmpl"))
 	if err != nil {
@@ -515,6 +529,7 @@ func createFileItem(folder string, filename string) (fi FileItem) {
 
 	fi.Size = humanize.Bytes(uint64(fs.Size()))
 	fi.ModifiedDate = humanize.Time(fs.ModTime())
+	fi.CreatedTime = fs.ModTime()
 
 	//Icon, find by checking extension
 	ext := strings.ToLower(filepath.Ext(filename))
