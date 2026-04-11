@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -26,6 +25,8 @@ import (
 	"github.com/dustin/go-humanize"
 	ga "github.com/jpillora/go-ogle-analytics"
 	"github.com/urfave/cli"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 var (
@@ -142,7 +143,7 @@ func (s ByCreationTime) Less(i, j int) bool {
 
 func serve(c *cli.Context) (err error) {
 	jconf := c.String("config")
-	cfile, err := ioutil.ReadFile(jconf)
+	cfile, err := os.ReadFile(jconf)
 	if err != nil {
 		log.Printf("Reading config file error: %v\n", err)
 		return err
@@ -177,7 +178,13 @@ func serve(c *cli.Context) (err error) {
 	http.Handle("/", http.FileServer(http.Dir(configJson.RootFolder)))
 	handler := buildHttpHandler()
 
-	err = http.ListenAndServe(":"+strconv.Itoa(configJson.Port), handler)
+	h2s := &http2.Server{}
+	server := &http.Server{
+		Addr:    ":" + strconv.Itoa(configJson.Port),
+		Handler: h2c.NewHandler(handler, h2s),
+	}
+
+	err = server.ListenAndServe()
 
 	return err
 }
@@ -216,106 +223,208 @@ func logHandler(handler http.Handler) http.Handler {
 	})
 }
 
+// validateUploadKey checks the upload key against configured keys.
+// Returns the upload subfolder path and true if key is valid.
+func validateUploadKey(key string) (uploadPath string, ok bool) {
+	for _, k := range configJson.UploadConfig {
+		if k.Key == key {
+			return k.Subfolder, true
+		}
+	}
+	return "", false
+}
+
+// writeUploadFile writes data from reader to destPath via a temp file.
+// If sha256Expected is non-empty, validates the checksum before final write.
+// If replace is false and destPath exists, returns an error.
+func writeUploadFile(destPath string, reader io.Reader, sha256Expected string, replace bool) error {
+	err := os.MkdirAll(path.Dir(destPath), os.ModePerm)
+	if err != nil {
+		return fmt.Errorf("error creating folder: %w", err)
+	}
+
+	if _, err := os.Stat(destPath); err == nil {
+		if !replace {
+			return fmt.Errorf("file exists")
+		}
+		os.Remove(destPath)
+	}
+
+	tmpfile, err := os.CreateTemp(os.TempDir(), "windex_upload")
+	if err != nil {
+		return fmt.Errorf("error creating temp file: %w", err)
+	}
+	defer os.Remove(tmpfile.Name())
+	defer tmpfile.Close()
+
+	io.Copy(tmpfile, reader)
+	tmpfile.Seek(0, 0)
+
+	if sha256Expected != "" {
+		hasher := sha256.New()
+		io.Copy(hasher, tmpfile)
+		sha := hex.EncodeToString(hasher.Sum(nil))
+
+		if sha256Expected != sha {
+			return fmt.Errorf("bad checksum: %v != %v", sha256Expected, sha)
+		}
+
+		tmpfile.Seek(0, 0)
+	}
+
+	f, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return fmt.Errorf("error opening dest file: %w", err)
+	}
+	defer f.Close()
+	io.Copy(f, tmpfile)
+
+	return nil
+}
+
 func uploadHandler(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 
-		if req.Method != "POST" || !strings.HasPrefix(req.URL.Path, "/upload") {
-			//Use default go serve handler
+		if !strings.HasPrefix(req.URL.Path, "/upload") {
 			handler.ServeHTTP(w, req)
 			return
 		}
-		w.Header().Set("Server", serverUA)
 
-		log.Printf("Handling file upload.")
-
-		formKey := req.FormValue("upload_key")
-		formSha256 := req.FormValue("upload_sha256")
-		formFolder := req.FormValue("upload_folder")
-		formReplace := req.FormValue("upload_replace")
-		formUpdateRepo := req.FormValue("upload_update_repo")
-		formRepo := req.FormValue("upload_repo")
-
-		log.Printf("Checking key authorization...")
-
-		found := false
-		uploadPath := ""
-		for _, k := range configJson.UploadConfig {
-			if k.Key == formKey {
-				found = true
-				uploadPath = k.Subfolder
-				break
-			}
+		switch req.Method {
+		case "POST":
+			handlePostUpload(w, req)
+		case "PUT":
+			handlePutUpload(w, req)
+		default:
+			handler.ServeHTTP(w, req)
 		}
-		if !found {
-			log.Printf("No autorized key (%v) found in config. Access refused.\n", formKey)
-			http.Error(w, "403 Forbidden", http.StatusForbidden)
-			return
+	})
+}
+
+func handlePutUpload(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Server", serverUA)
+
+	log.Printf("Handling PUT file upload.")
+
+	uploadKey := req.Header.Get("X-Upload-Key")
+	uploadFilename := req.Header.Get("X-Upload-Filename")
+	uploadFolder := req.Header.Get("X-Upload-Folder")
+	uploadSha256 := req.Header.Get("X-Upload-SHA256")
+	uploadReplace := req.Header.Get("X-Upload-Replace")
+	uploadUpdateRepo := req.Header.Get("X-Upload-Update-Repo")
+	uploadRepo := req.Header.Get("X-Upload-Repo")
+
+	if uploadKey == "" {
+		http.Error(w, "400 Bad Request: missing X-Upload-Key header", http.StatusBadRequest)
+		return
+	}
+	if uploadFilename == "" {
+		http.Error(w, "400 Bad Request: missing X-Upload-Filename header", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Checking key authorization...")
+
+	uploadPath, ok := validateUploadKey(uploadKey)
+	if !ok {
+		log.Printf("No autorized key (%v) found in config. Access refused.\n", uploadKey)
+		http.Error(w, "403 Forbidden", http.StatusForbidden)
+		return
+	}
+
+	log.Printf("PUT upload info:\n\tkey: %v\n\tsha256: %v\n\tfolder: %v\n\tfilename: %v\n", uploadKey, uploadSha256, uploadFolder, uploadFilename)
+
+	destPath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(uploadFolder), path.Clean(uploadFilename))
+	log.Printf("Saving file to: %v\n", destPath)
+
+	err := writeUploadFile(destPath, req.Body, uploadSha256, uploadReplace == "true")
+	if err != nil {
+		if strings.Contains(err.Error(), "file exists") {
+			http.Error(w, "403 File exists.", http.StatusForbidden)
+			log.Printf("Error file exists already. Not overwriting. %v\n", destPath)
+		} else if strings.Contains(err.Error(), "bad checksum") {
+			http.Error(w, "400 Bad checksum: SHA256 failed.", http.StatusBadRequest)
+			log.Printf("Wrong sha256: %v\n", err)
+		} else {
+			http.Error(w, "500 Internal Error: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("Error writing file: %v\n", err)
 		}
+		return
+	}
 
-		log.Printf("Uploading info:\n\tkey: %v\n\tsha256: %v\n\tfolder: %v\n", formKey, formSha256, formFolder)
-
-		req.ParseMultipartForm(32 << 20)
-		file, h, err := req.FormFile("upload_file")
+	if uploadUpdateRepo == "true" {
+		err = startRepoTool(w, path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(uploadFolder)), path.Clean(uploadFilename), uploadRepo)
 		if err != nil {
-			http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
-			log.Printf("Error getting file %v\n", err)
+			http.Error(w, "500 Internal Error: Error while adding package to repo.", http.StatusInternalServerError)
+			log.Printf("Failed to add package to repo\n")
 			return
 		}
-		defer file.Close()
+	}
 
-		if req.MultipartForm != nil {
-			defer req.MultipartForm.RemoveAll()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusCreated)
+	fmt.Fprintln(w, "File created")
+
+	go ScanForReleases()
+}
+
+func handlePostUpload(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Server", serverUA)
+
+	log.Printf("Handling POST file upload.")
+
+	formKey := req.FormValue("upload_key")
+	formSha256 := req.FormValue("upload_sha256")
+	formFolder := req.FormValue("upload_folder")
+	formReplace := req.FormValue("upload_replace")
+	formUpdateRepo := req.FormValue("upload_update_repo")
+	formRepo := req.FormValue("upload_repo")
+
+	log.Printf("Checking key authorization...")
+
+	uploadPath, ok := validateUploadKey(formKey)
+	if !ok {
+		log.Printf("No autorized key (%v) found in config. Access refused.\n", formKey)
+		http.Error(w, "403 Forbidden", http.StatusForbidden)
+		return
+	}
+
+	log.Printf("Uploading info:\n\tkey: %v\n\tsha256: %v\n\tfolder: %v\n", formKey, formSha256, formFolder)
+
+	req.ParseMultipartForm(32 << 20)
+	file, h, err := req.FormFile("upload_file")
+	if err != nil {
+		http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
+		log.Printf("Error getting file %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	if req.MultipartForm != nil {
+		defer req.MultipartForm.RemoveAll()
+	}
+
+	destPath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), h.Filename)
+	log.Printf("Saving file to: %v\n", destPath)
+
+	err = writeUploadFile(destPath, file, formSha256, formReplace == "true")
+	if err != nil {
+		if strings.Contains(err.Error(), "file exists") {
+			http.Error(w, "403 File exists.", http.StatusForbidden)
+			log.Printf("Error file exists already. Not overwriting. %v\n", destPath)
+		} else if strings.Contains(err.Error(), "bad checksum") {
+			http.Error(w, "400 Bad checksum: SHA256 failed.", http.StatusBadRequest)
+			log.Printf("Wrong sha256: %v\n", err)
+		} else {
+			http.Error(w, "500 Internal Error: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("Error writing file: %v\n", err)
 		}
+		return
+	}
 
-		filepath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), h.Filename)
-		log.Printf("Saving file to: %v\n", filepath)
-		err = os.MkdirAll(path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), os.ModePerm)
-		if err != nil {
-			http.Error(w, "500 Internal Error: Error while creating folder.", http.StatusInternalServerError)
-			log.Printf("Error creating folder %v\n", err)
-			return
-		}
-
-		if _, err := os.Stat(filepath); err == nil {
-			if formReplace != "true" {
-				http.Error(w, "403 File exists.", http.StatusForbidden)
-				log.Printf("Error file exists already. Not overwriting. %v\n", filepath)
-				return
-			} else {
-				os.Remove(filepath)
-			}
-		}
-
-		tmpfile, _ := ioutil.TempFile(os.TempDir(), "windex_upload")
-		defer os.Remove(tmpfile.Name())
-		io.Copy(tmpfile, file)
-		tmpfile.Seek(0, 0)
-
-		if formSha256 != "" {
-			//Check SHA256
-			hasher := sha256.New()
-			io.Copy(hasher, tmpfile)
-			sha := hex.EncodeToString(hasher.Sum(nil))
-
-			if formSha256 != sha {
-				http.Error(w, "400 Bad checksum: SHA256 failed.", http.StatusBadRequest)
-				log.Printf("Wrong sha256 %v != %v\n", formSha256, sha)
-				return
-			}
-
-			tmpfile.Seek(0, 0)
-		}
-
-		f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE, 0666)
-		if err != nil {
-			http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
-			log.Printf("Error opening file %v\n", err)
-			return
-		}
-		defer f.Close()
-		io.Copy(f, tmpfile)
-
-		//Save signature file if it exists
+	//Save signature file if it exists
+	if req.MultipartForm != nil {
 		_, hasSignature := req.MultipartForm.File["upload_file_sig"]
 		if hasSignature {
 			fileSig, hSig, err := req.FormFile("upload_file_sig")
@@ -326,50 +435,38 @@ func uploadHandler(handler http.Handler) http.Handler {
 			}
 			defer fileSig.Close()
 
-			filepath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), hSig.Filename)
-			log.Printf("Saving file to: %v\n", filepath)
+			sigPath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), hSig.Filename)
+			log.Printf("Saving signature file to: %v\n", sigPath)
 
-			if _, err := os.Stat(filepath); err == nil {
-				if formReplace != "true" {
+			err = writeUploadFile(sigPath, fileSig, "", formReplace == "true")
+			if err != nil {
+				if strings.Contains(err.Error(), "file exists") {
 					http.Error(w, "403 File exists.", http.StatusForbidden)
-					log.Printf("Error file exists already. Not overwriting. %v\n", filepath)
-					return
+					log.Printf("Error file exists already. Not overwriting. %v\n", sigPath)
 				} else {
-					os.Remove(filepath)
+					http.Error(w, "500 Internal Error: "+err.Error(), http.StatusInternalServerError)
+					log.Printf("Error writing signature file: %v\n", err)
 				}
-			}
-
-			tmpfile, _ := ioutil.TempFile(os.TempDir(), "windex_upload_sig")
-			defer os.Remove(tmpfile.Name())
-			io.Copy(tmpfile, fileSig)
-			tmpfile.Seek(0, 0)
-
-			f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE, 0666)
-			if err != nil {
-				http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
-				log.Printf("Error opening file %v\n", err)
-				return
-			}
-			defer f.Close()
-			io.Copy(f, tmpfile)
-		}
-
-		if formUpdateRepo == "true" {
-			err = startRepoTool(w, path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), h.Filename, formRepo)
-			if err != nil {
-				http.Error(w, "500 Internal Error: Error while adding package to repo.", http.StatusInternalServerError)
-				log.Printf("Failed to add package to repo\n")
 				return
 			}
 		}
+	}
 
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintln(w, "File created")
+	if formUpdateRepo == "true" {
+		err = startRepoTool(w, path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), h.Filename, formRepo)
+		if err != nil {
+			http.Error(w, "500 Internal Error: Error while adding package to repo.", http.StatusInternalServerError)
+			log.Printf("Failed to add package to repo\n")
+			return
+		}
+	}
 
-		go ScanForReleases()
-	})
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusCreated)
+	fmt.Fprintln(w, "File created")
+
+	go ScanForReleases()
 }
 
 func fileHandler(handler http.Handler) http.Handler {
