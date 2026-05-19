@@ -1,36 +1,36 @@
 package cmd
 
 import (
-    "time"
+	"time"
 
-    "github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
-func stringFlag(name, value, usage string) cli.StringFlag {
-	return cli.StringFlag{
+func stringFlag(name, value, usage string) *cli.StringFlag {
+	return &cli.StringFlag{
 		Name:  name,
 		Value: value,
 		Usage: usage,
 	}
 }
 
-func boolFlag(name, usage string) cli.BoolFlag {
-	return cli.BoolFlag{
+func boolFlag(name, usage string) *cli.BoolFlag {
+	return &cli.BoolFlag{
 		Name:  name,
 		Usage: usage,
 	}
 }
 
-func intFlag(name string, value int, usage string) cli.IntFlag {
-	return cli.IntFlag{
+func intFlag(name string, value int, usage string) *cli.IntFlag {
+	return &cli.IntFlag{
 		Name:  name,
 		Value: value,
 		Usage: usage,
 	}
 }
 
-func durationFlag(name string, value time.Duration, usage string) cli.DurationFlag {
-	return cli.DurationFlag{
+func durationFlag(name string, value time.Duration, usage string) *cli.DurationFlag {
+	return &cli.DurationFlag{
 		Name:  name,
 		Value: value,
 		Usage: usage,

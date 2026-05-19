@@ -1,10 +1,12 @@
 {
 	"proxy_prefix": "",
 	"root_folder": "D:\\qt5",
-	"google_analytics_id": "ga-xxx",
+	"umami_website_id": "",
+	"umami_script_url": "https://cloud.umami.is/script.js",
+	"umami_api_host": "https://cloud.umami.is",
 	"port": 9696,
 	"template_dir": "./html",
-	
+
 	"upload_config": [
 	{
 		"subfolder": "mysub1",

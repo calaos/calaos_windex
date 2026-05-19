@@ -20,7 +20,7 @@
 	padding:0;
 	-webkit-box-sizing:border-box;
 	   -moz-box-sizing:border-box;
-	       box-sizing: border-box; 
+	       box-sizing: border-box;
 }
 
 html {
@@ -35,7 +35,7 @@ body {
 	-webkit-backface-visibility:hidden;
 }
 code {
-	font-family:consolas,monospace;	
+	font-family:consolas,monospace;
 }
 a {
 	color:#61666c;
@@ -211,18 +211,21 @@ tr.parent a[href^="/"] {
 }
 
 .breadcrumb .crust:hover a.crumb {
-    text-decoration:none; 
+    text-decoration:none;
     cursor: pointer;
     background: #0076D1;
 	transition: all 0.5s ease;
 }
 
 .breadcrumb .crust:hover .arrow span {
- 
+
     border-left-color: #0076D1;
 	transition: all 0.5s ease;
 }
   </style>
+  {{ if .UmamiWebsiteId }}
+  <script defer src="{{ .UmamiScriptURL }}" data-website-id="{{ .UmamiWebsiteId }}"></script>
+  {{ end }}
 </head>
 <body>
 <div class="header">

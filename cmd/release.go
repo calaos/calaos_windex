@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -43,27 +42,28 @@ func (t JSONTime) MarshalJSON() ([]byte, error) {
 
 var (
 	releaseCache []*ReleaseFile
-	relMutex     = &sync.Mutex{}
+	relMutex     sync.RWMutex
 )
 
 func apiHandler(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" ||
-			!strings.HasPrefix(r.URL.Path, "/api") ||
-			strings.ToLower(r.Header.Get("Content-Type")) != "application/json" {
+		// A9: filter by method + path only — do not require Content-Type on GET requests
+		if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/api") {
 			handler.ServeHTTP(w, r)
 			return
 		}
 
 		log.Println("/api called")
 
+		relMutex.RLock()
+		cache := releaseCache
+		relMutex.RUnlock()
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 
 		enc := json.NewEncoder(w)
-		err := enc.Encode(releaseCache)
-
-		if err != nil {
+		if err := enc.Encode(cache); err != nil {
 			log.Println("Failed to marshal json:", err)
 		}
 	})
@@ -77,36 +77,45 @@ func ScanForReleases() {
 	for _, apiItem := range configJson.ApiConfig {
 		d := filepath.Join(configJson.RootFolder, apiItem.Folder)
 
-		files, err := ioutil.ReadDir(d)
+		files, err := os.ReadDir(d)
 		if err != nil {
 			log.Println("Failed to read dir", d, err)
+			continue
 		}
 
 		for _, f := range files {
-			if strings.HasSuffix(f.Name(), ".tar.xz") ||
-				strings.HasSuffix(f.Name(), ".tar.gz") ||
-				strings.HasSuffix(f.Name(), ".tar.zst") ||
-				strings.HasSuffix(f.Name(), ".tar.bz2") ||
-				strings.HasSuffix(f.Name(), ".hddimg") ||
-				strings.HasSuffix(f.Name(), ".hddimg.xz") ||
-				strings.HasSuffix(f.Name(), ".hddimg.zst") ||
-				strings.HasSuffix(f.Name(), ".rpi-sdimg") ||
-				strings.HasSuffix(f.Name(), "sdimg") ||
-				strings.HasSuffix(f.Name(), ".rpi-sdimg.xz") {
-
-				r := &ReleaseFile{
-					Filename:    filepath.Join(d, f.Name()),
-					Url:         fmt.Sprintf("https://calaos.fr/download/%s/%s", apiItem.Folder, f.Name()),
-					Machine:     apiItem.Machine,
-					ReleaseType: apiItem.ReleaseType,
-					Date:        JSONTime(f.ModTime()),
-					Version:     extractVersion(f.Name()),
-					Filesize:    f.Size(),
-					Checksum:    computeBlakeHash(filepath.Join(d, f.Name())),
-				}
-
-				rel = append(rel, r)
+			name := f.Name()
+			if !strings.HasSuffix(name, ".tar.xz") &&
+				!strings.HasSuffix(name, ".tar.gz") &&
+				!strings.HasSuffix(name, ".tar.zst") &&
+				!strings.HasSuffix(name, ".tar.bz2") &&
+				!strings.HasSuffix(name, ".hddimg") &&
+				!strings.HasSuffix(name, ".hddimg.xz") &&
+				!strings.HasSuffix(name, ".hddimg.zst") &&
+				!strings.HasSuffix(name, ".rpi-sdimg") &&
+				!strings.HasSuffix(name, "sdimg") &&
+				!strings.HasSuffix(name, ".rpi-sdimg.xz") {
+				continue
 			}
+
+			fi, err := f.Info()
+			if err != nil {
+				log.Println("Failed to stat file", name, err)
+				continue
+			}
+
+			r := &ReleaseFile{
+				Filename:    filepath.Join(d, name),
+				Url:         fmt.Sprintf("https://calaos.fr/download/%s/%s", apiItem.Folder, name),
+				Machine:     apiItem.Machine,
+				ReleaseType: apiItem.ReleaseType,
+				Date:        JSONTime(fi.ModTime()),
+				Version:     extractVersion(name),
+				Filesize:    fi.Size(),
+				Checksum:    computeBlakeHash(filepath.Join(d, name)),
+			}
+
+			rel = append(rel, r)
 		}
 	}
 

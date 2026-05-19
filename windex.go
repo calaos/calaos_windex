@@ -1,25 +1,25 @@
-// +build go1.6
+//go:build go1.21
 
 package main
 
 import (
+	"log"
 	"os"
-	"runtime"
 
 	"github.com/calaos/calaos_windex/cmd"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU())
-
-	app := cli.NewApp()
-	app.Name = "Windex HTTP file index"
-	app.Usage = "List, serve and track file download"
-	app.Version = "2.0"
-	app.Commands = []cli.Command{
-		cmd.CmdServe,
+	app := &cli.App{
+		Name:    "Windex HTTP file index",
+		Usage:   "List, serve and track file download",
+		Version: "2.0",
+		Commands: []*cli.Command{
+			&cmd.CmdServe,
+		},
 	}
-	app.Flags = append(app.Flags, []cli.Flag{}...)
-	app.Run(os.Args)
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
 }

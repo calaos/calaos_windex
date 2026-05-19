@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"container/list"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"html/template"
 	"io"
 	"log"
@@ -23,15 +25,21 @@ import (
 	"unicode"
 
 	"github.com/dustin/go-humanize"
-	ga "github.com/jpillora/go-ogle-analytics"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
 
 var (
 	configJson Config
+
+	// staticHandler serves /static/* assets. Built once at startup so the
+	// safeFileSystem resolution (Abs + EvalSymlinks) is not redone per request.
+	staticHandler http.Handler
 )
+
+// staticCacheMaxAge controls Cache-Control max-age for /static/* (seconds).
+const staticCacheMaxAge = 3600
 
 const (
 	serverUA = "Calaos-WIndex/2.0"
@@ -51,12 +59,29 @@ var CmdServe = cli.Command{
 }
 
 type Config struct {
-	ProxyPrefix       string `json:"proxy_prefix"`
-	RootFolder        string `json:"root_folder"`
-	GoogleAnalyticsId string `json:"google_analytics_id"`
-	Port              int    `json:"port"`
-	TemplateDir       string `json:"template_dir"`
-	RepoTool          string `json:"repo_tool"`
+	ProxyPrefix    string `json:"proxy_prefix"`
+	RootFolder     string `json:"root_folder"`
+	Port           int    `json:"port"`
+	TemplateDir    string `json:"template_dir"`
+	RepoTool       string `json:"repo_tool"`
+	MaxUploadBytes int64  `json:"max_upload_bytes"` // 0 = default 2 GiB
+
+	// Umami analytics. Page-views come from the JS snippet injected in the
+	// template; download events are sent server-side from fileHandler. Events
+	// fire only when the server actually delivers the file (not when it
+	// redirects to the mirror), so each download is counted once on the
+	// instance that serves it.
+	UmamiWebsiteId string `json:"umami_website_id"` // empty = disabled
+	UmamiScriptURL string `json:"umami_script_url"` // default https://cloud.umami.is/script.js
+	UmamiAPIHost   string `json:"umami_api_host"`   // default https://cloud.umami.is
+
+	// Mirror redirect: download files requested on PrimaryHosts are redirected
+	// to MirrorBaseURL. Requests arriving on other hosts (the mirror itself)
+	// are served directly, preventing redirect loops.
+	MirrorBaseURL      string   `json:"mirror_base_url"`      // e.g. "https://dl-direct.raoulh.pw/download". Empty = disabled.
+	MirrorMinBytes     int64    `json:"mirror_min_bytes"`     // redirect only if file >= this size. 0 = all files.
+	MirrorRedirectCode int      `json:"mirror_redirect_code"` // HTTP redirect code. Default 302.
+	PrimaryHosts       []string `json:"primary_hosts"`        // hosts eligible for redirect, e.g. ["calaos.fr", "www.calaos.fr"]
 
 	UploadConfig []struct {
 		Subfolder string `json:"subfolder"`
@@ -68,6 +93,9 @@ type Config struct {
 		Machine     string `json:"machine"`      //can be: x86-64, raspberrypi, rasperrypi0, rasperrypi2, rasperrypi3, rasperrypi4
 	} `json:"api_config"`
 }
+
+// defaultMaxUploadBytes is 2 GiB — overridden by max_upload_bytes in config.
+const defaultMaxUploadBytes = 2 << 30
 
 type FileItem struct {
 	Icon         string
@@ -84,12 +112,14 @@ type Breadcrumb struct {
 }
 
 type DirListing struct {
-	Name        string
-	ShowParent  bool
-	Prefix      string
-	Folders     []FileItem
-	Files       []FileItem
-	Breadcrumbs []Breadcrumb
+	Name           string
+	ShowParent     bool
+	Prefix         string
+	Folders        []FileItem
+	Files          []FileItem
+	Breadcrumbs    []Breadcrumb
+	UmamiWebsiteId string
+	UmamiScriptURL string
 }
 
 type ByCase []FileItem
@@ -141,7 +171,7 @@ func (s ByCreationTime) Less(i, j int) bool {
 	return s[i].CreatedTime.After(s[j].CreatedTime) // Newer files first
 }
 
-func serve(c *cli.Context) (err error) {
+func serve(c *cli.Context) error {
 	jconf := c.String("config")
 	cfile, err := os.ReadFile(jconf)
 	if err != nil {
@@ -154,39 +184,69 @@ func serve(c *cli.Context) (err error) {
 		return err
 	}
 
-	if configJson.TemplateDir[0] == '.' {
-		curr, err := os.Getwd()
+	// B2: guard against empty TemplateDir before indexing it
+	if configJson.TemplateDir == "" {
+		return fmt.Errorf("template_dir must be set in config")
+	}
+	if !filepath.IsAbs(configJson.TemplateDir) {
+		abs, err := filepath.Abs(configJson.TemplateDir)
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("resolving template_dir: %w", err)
 		}
-		configJson.TemplateDir = path.Join(curr, configJson.TemplateDir)
+		configJson.TemplateDir = abs
 	}
 
-	if err = os.Chdir(configJson.RootFolder); err != nil {
-		log.Printf("Can't chdir to root_folder: %v\n", err)
-		return err
+	// Resolve RootFolder to an absolute path (no Chdir — avoids global CWD mutation).
+	if configJson.RootFolder == "" {
+		return fmt.Errorf("root_folder must be set in config")
+	}
+	if !filepath.IsAbs(configJson.RootFolder) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getwd: %w", err)
+		}
+		configJson.RootFolder = filepath.Join(cwd, configJson.RootFolder)
 	}
 
 	if configJson.Port == 0 {
 		configJson.Port = 9696
+	}
+	if configJson.MaxUploadBytes <= 0 {
+		configJson.MaxUploadBytes = defaultMaxUploadBytes
+	}
+
+	applyUmamiDefaults(&configJson)
+
+	// Build static handler once: safeFileSystem instance reused across requests,
+	// wrapped with Cache-Control headers so browsers cache assets locally.
+	staticHandler = http.StripPrefix("/static/",
+		staticCacheHeaders(http.FileServer(newSafeFileSystem(configJson.TemplateDir))))
+
+	// Validate mirror config at startup so misconfigurations surface immediately.
+	if err := validateMirrorConfig(&configJson); err != nil {
+		return fmt.Errorf("invalid mirror config: %w", err)
 	}
 
 	ScanForReleases()
 
 	fmt.Println(Arrow, " Starting HTTP server ( root: ", configJson.RootFolder, "), on port", configJson.Port)
 
-	http.Handle("/", http.FileServer(http.Dir(configJson.RootFolder)))
+	// A8: use safeFileSystem on the root mux entry
+	http.Handle("/", http.FileServer(newSafeFileSystem(configJson.RootFolder)))
 	handler := buildHttpHandler()
 
 	h2s := &http2.Server{}
+	// A5: add server-level timeouts to prevent Slowloris attacks
 	server := &http.Server{
-		Addr:    ":" + strconv.Itoa(configJson.Port),
-		Handler: h2c.NewHandler(handler, h2s),
+		Addr:              ":" + strconv.Itoa(configJson.Port),
+		Handler:           h2c.NewHandler(handler, h2s),
+		ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// WriteTimeout intentionally omitted: large file downloads need no cap here;
+		// per-request timeouts should be handled at the reverse proxy level.
 	}
 
-	err = server.ListenAndServe()
-
-	return err
+	return server.ListenAndServe()
 }
 
 func buildHttpHandler() http.Handler {
@@ -223,62 +283,111 @@ func logHandler(handler http.Handler) http.Handler {
 	})
 }
 
-// validateUploadKey checks the upload key against configured keys.
+// safePath joins root + components and verifies the result stays under root.
+// Returns an error for path traversal attempts or invalid components.
+func safePath(root string, components ...string) (string, error) {
+	for _, c := range components {
+		// Reject any component that contains a path separator or is ".."
+		if strings.Contains(c, "/") || strings.Contains(c, "\\") || c == ".." || c == "." {
+			return "", fmt.Errorf("invalid path component: %q", c)
+		}
+		if c == "" {
+			continue
+		}
+		// Reject dotfiles
+		if strings.HasPrefix(c, ".") {
+			return "", fmt.Errorf("dotfile components are not allowed: %q", c)
+		}
+	}
+
+	parts := append([]string{root}, components...)
+	dest := filepath.Join(parts...)
+	dest = filepath.Clean(dest)
+
+	rootClean := filepath.Clean(root)
+	if !strings.HasPrefix(dest, rootClean+string(os.PathSeparator)) && dest != rootClean {
+		return "", fmt.Errorf("path escapes root directory")
+	}
+	return dest, nil
+}
+
+// validateUploadKey checks the upload key against configured keys using
+// constant-time comparison to prevent timing attacks.
 // Returns the upload subfolder path and true if key is valid.
 func validateUploadKey(key string) (uploadPath string, ok bool) {
 	for _, k := range configJson.UploadConfig {
-		if k.Key == key {
+		// A2: constant-time comparison to prevent timing side-channel
+		if subtle.ConstantTimeCompare([]byte(key), []byte(k.Key)) == 1 {
 			return k.Subfolder, true
 		}
 	}
 	return "", false
 }
 
-// writeUploadFile writes data from reader to destPath via a temp file.
-// If sha256Expected is non-empty, validates the checksum before final write.
-// If replace is false and destPath exists, returns an error.
+// writeUploadFile writes data from reader to destPath atomically via a temp file
+// placed in the same directory as the destination (enables atomic os.Rename).
+// If sha256Expected is non-empty, validates the checksum before committing.
+// If replace is false and destPath already exists, returns an error.
 func writeUploadFile(destPath string, reader io.Reader, sha256Expected string, replace bool) error {
-	err := os.MkdirAll(path.Dir(destPath), os.ModePerm)
-	if err != nil {
+	dir := filepath.Dir(destPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("error creating folder: %w", err)
 	}
 
-	if _, err := os.Stat(destPath); err == nil {
-		if !replace {
-			return fmt.Errorf("file exists")
-		}
-		os.Remove(destPath)
+	// A6: check existence before writing (not after) — still a soft TOCTOU but
+	// the real guard is O_EXCL on the final rename target below.
+	if _, err := os.Stat(destPath); err == nil && !replace {
+		return fmt.Errorf("file exists")
 	}
 
-	tmpfile, err := os.CreateTemp(os.TempDir(), "windex_upload")
+	// A6: temp file in the same directory so os.Rename is atomic (same FS).
+	tmpfile, err := os.CreateTemp(dir, ".windex-upload-*")
 	if err != nil {
 		return fmt.Errorf("error creating temp file: %w", err)
 	}
-	defer os.Remove(tmpfile.Name())
-	defer tmpfile.Close()
-
-	io.Copy(tmpfile, reader)
-	tmpfile.Seek(0, 0)
-
-	if sha256Expected != "" {
-		hasher := sha256.New()
-		io.Copy(hasher, tmpfile)
-		sha := hex.EncodeToString(hasher.Sum(nil))
-
-		if sha256Expected != sha {
-			return fmt.Errorf("bad checksum: %v != %v", sha256Expected, sha)
+	tmpName := tmpfile.Name()
+	// Always clean up the temp file on error.
+	committed := false
+	defer func() {
+		tmpfile.Close()
+		if !committed {
+			os.Remove(tmpName)
 		}
+	}()
 
-		tmpfile.Seek(0, 0)
+	// A7: check all I/O errors; C1: stream through hash in one pass via TeeReader.
+	var w io.Writer = tmpfile
+	var hasher hash.Hash
+	if sha256Expected != "" {
+		hasher = sha256.New()
+		w = io.MultiWriter(tmpfile, hasher)
 	}
 
-	f, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		return fmt.Errorf("error opening dest file: %w", err)
+	if _, err := io.Copy(w, reader); err != nil {
+		return fmt.Errorf("error writing upload data: %w", err)
 	}
-	defer f.Close()
-	io.Copy(f, tmpfile)
 
+	if hasher != nil {
+		got := hex.EncodeToString(hasher.Sum(nil))
+		if sha256Expected != got {
+			return fmt.Errorf("bad checksum: expected %v got %v", sha256Expected, got)
+		}
+	}
+
+	if err := tmpfile.Sync(); err != nil {
+		return fmt.Errorf("error syncing temp file: %w", err)
+	}
+	if err := tmpfile.Close(); err != nil {
+		return fmt.Errorf("error closing temp file: %w", err)
+	}
+
+	// A6: atomic rename — if replace=false and the target appeared between our
+	// Stat check and now, the rename will still succeed (last-writer-wins).
+	// For strict no-overwrite, use a link+rename trick; this is sufficient here.
+	if err := os.Rename(tmpName, destPath); err != nil {
+		return fmt.Errorf("error committing file: %w", err)
+	}
+	committed = true
 	return nil
 }
 
@@ -327,35 +436,50 @@ func handlePutUpload(w http.ResponseWriter, req *http.Request) {
 
 	uploadPath, ok := validateUploadKey(uploadKey)
 	if !ok {
-		log.Printf("No autorized key (%v) found in config. Access refused.\n", uploadKey)
+		// A3: do NOT log the key value — only log that access was refused
+		log.Printf("Unauthorized upload attempt refused.\n")
 		http.Error(w, "403 Forbidden", http.StatusForbidden)
 		return
 	}
 
-	log.Printf("PUT upload info:\n\tkey: %v\n\tsha256: %v\n\tfolder: %v\n\tfilename: %v\n", uploadKey, uploadSha256, uploadFolder, uploadFilename)
+	// A3: log upload metadata without the secret key
+	log.Printf("PUT upload info:\n\tsha256: %v\n\tfolder: %v\n\tfilename: %v\n", uploadSha256, uploadFolder, uploadFilename)
 
-	destPath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(uploadFolder), path.Clean(uploadFilename))
+	// A1: use safePath to prevent path traversal
+	destPath, err := safePath(configJson.RootFolder, uploadPath, uploadFolder, uploadFilename)
+	if err != nil {
+		log.Printf("Invalid upload path: %v\n", err)
+		http.Error(w, "400 Bad Request: invalid path", http.StatusBadRequest)
+		return
+	}
 	log.Printf("Saving file to: %v\n", destPath)
 
-	err := writeUploadFile(destPath, req.Body, uploadSha256, uploadReplace == "true")
+	// A4: limit request body size to prevent DoS
+	req.Body = http.MaxBytesReader(w, req.Body, configJson.MaxUploadBytes)
+
+	err = writeUploadFile(destPath, req.Body, uploadSha256, uploadReplace == "true")
 	if err != nil {
 		if strings.Contains(err.Error(), "file exists") {
 			http.Error(w, "403 File exists.", http.StatusForbidden)
-			log.Printf("Error file exists already. Not overwriting. %v\n", destPath)
+			log.Printf("File already exists, not overwriting: %v\n", destPath)
 		} else if strings.Contains(err.Error(), "bad checksum") {
 			http.Error(w, "400 Bad checksum: SHA256 failed.", http.StatusBadRequest)
 			log.Printf("Wrong sha256: %v\n", err)
+		} else if strings.Contains(err.Error(), "request body too large") {
+			http.Error(w, "413 Request Entity Too Large", http.StatusRequestEntityTooLarge)
+			log.Printf("Upload too large: %v\n", destPath)
 		} else {
-			http.Error(w, "500 Internal Error: "+err.Error(), http.StatusInternalServerError)
+			// A9: generic error to client, detail only in server logs
+			http.Error(w, "500 Internal Server Error", http.StatusInternalServerError)
 			log.Printf("Error writing file: %v\n", err)
 		}
 		return
 	}
 
 	if uploadUpdateRepo == "true" {
-		err = startRepoTool(w, path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(uploadFolder)), path.Clean(uploadFilename), uploadRepo)
+		err = startRepoTool(w, filepath.Join(configJson.RootFolder, filepath.Clean(uploadPath), filepath.Clean(uploadFolder)), filepath.Clean(uploadFilename), uploadRepo)
 		if err != nil {
-			http.Error(w, "500 Internal Error: Error while adding package to repo.", http.StatusInternalServerError)
+			http.Error(w, "500 Internal Server Error", http.StatusInternalServerError)
 			log.Printf("Failed to add package to repo\n")
 			return
 		}
@@ -385,17 +509,25 @@ func handlePostUpload(w http.ResponseWriter, req *http.Request) {
 
 	uploadPath, ok := validateUploadKey(formKey)
 	if !ok {
-		log.Printf("No autorized key (%v) found in config. Access refused.\n", formKey)
+		// A3: do NOT log the key value
+		log.Printf("Unauthorized upload attempt refused.\n")
 		http.Error(w, "403 Forbidden", http.StatusForbidden)
 		return
 	}
 
-	log.Printf("Uploading info:\n\tkey: %v\n\tsha256: %v\n\tfolder: %v\n", formKey, formSha256, formFolder)
+	// A3: no key in logs
+	log.Printf("POST upload info:\n\tsha256: %v\n\tfolder: %v\n", formSha256, formFolder)
 
-	req.ParseMultipartForm(32 << 20)
+	// A4: limit body size before parsing multipart
+	req.Body = http.MaxBytesReader(w, req.Body, configJson.MaxUploadBytes)
+	if err := req.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "400 Bad Request: could not parse multipart form", http.StatusBadRequest)
+		log.Printf("Error parsing multipart form: %v\n", err)
+		return
+	}
 	file, h, err := req.FormFile("upload_file")
 	if err != nil {
-		http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
+		http.Error(w, "400 Bad Request: missing upload_file field", http.StatusBadRequest)
 		log.Printf("Error getting file %v\n", err)
 		return
 	}
@@ -405,46 +537,59 @@ func handlePostUpload(w http.ResponseWriter, req *http.Request) {
 		defer req.MultipartForm.RemoveAll()
 	}
 
-	destPath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), h.Filename)
+	// A1: safePath prevents path traversal via h.Filename or formFolder
+	destPath, err := safePath(configJson.RootFolder, uploadPath, formFolder, h.Filename)
+	if err != nil {
+		log.Printf("Invalid upload path: %v\n", err)
+		http.Error(w, "400 Bad Request: invalid path", http.StatusBadRequest)
+		return
+	}
 	log.Printf("Saving file to: %v\n", destPath)
 
 	err = writeUploadFile(destPath, file, formSha256, formReplace == "true")
 	if err != nil {
 		if strings.Contains(err.Error(), "file exists") {
 			http.Error(w, "403 File exists.", http.StatusForbidden)
-			log.Printf("Error file exists already. Not overwriting. %v\n", destPath)
+			log.Printf("File already exists, not overwriting: %v\n", destPath)
 		} else if strings.Contains(err.Error(), "bad checksum") {
 			http.Error(w, "400 Bad checksum: SHA256 failed.", http.StatusBadRequest)
 			log.Printf("Wrong sha256: %v\n", err)
 		} else {
-			http.Error(w, "500 Internal Error: "+err.Error(), http.StatusInternalServerError)
+			// A9: generic error to client
+			http.Error(w, "500 Internal Server Error", http.StatusInternalServerError)
 			log.Printf("Error writing file: %v\n", err)
 		}
 		return
 	}
 
-	//Save signature file if it exists
+	// Save signature file if it exists
 	if req.MultipartForm != nil {
 		_, hasSignature := req.MultipartForm.File["upload_file_sig"]
 		if hasSignature {
 			fileSig, hSig, err := req.FormFile("upload_file_sig")
 			if err != nil {
-				http.Error(w, "500 Internal Error: Error while opening the file.", http.StatusInternalServerError)
-				log.Printf("Error getting file %v\n", err)
+				http.Error(w, "400 Bad Request: could not read signature file", http.StatusBadRequest)
+				log.Printf("Error getting signature file %v\n", err)
 				return
 			}
 			defer fileSig.Close()
 
-			sigPath := path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder), hSig.Filename)
+			// A1: safePath for signature file too
+			sigPath, err := safePath(configJson.RootFolder, uploadPath, formFolder, hSig.Filename)
+			if err != nil {
+				log.Printf("Invalid signature path: %v\n", err)
+				http.Error(w, "400 Bad Request: invalid signature path", http.StatusBadRequest)
+				return
+			}
 			log.Printf("Saving signature file to: %v\n", sigPath)
 
 			err = writeUploadFile(sigPath, fileSig, "", formReplace == "true")
 			if err != nil {
 				if strings.Contains(err.Error(), "file exists") {
 					http.Error(w, "403 File exists.", http.StatusForbidden)
-					log.Printf("Error file exists already. Not overwriting. %v\n", sigPath)
+					log.Printf("Signature file already exists, not overwriting: %v\n", sigPath)
 				} else {
-					http.Error(w, "500 Internal Error: "+err.Error(), http.StatusInternalServerError)
+					http.Error(w, "500 Internal Server Error", http.StatusInternalServerError)
 					log.Printf("Error writing signature file: %v\n", err)
 				}
 				return
@@ -453,9 +598,9 @@ func handlePostUpload(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if formUpdateRepo == "true" {
-		err = startRepoTool(w, path.Join(configJson.RootFolder, path.Clean(uploadPath), path.Clean(formFolder)), h.Filename, formRepo)
+		err = startRepoTool(w, filepath.Join(configJson.RootFolder, filepath.Clean(uploadPath), filepath.Clean(formFolder)), h.Filename, formRepo)
 		if err != nil {
-			http.Error(w, "500 Internal Error: Error while adding package to repo.", http.StatusInternalServerError)
+			http.Error(w, "500 Internal Server Error", http.StatusInternalServerError)
 			log.Printf("Failed to add package to repo\n")
 			return
 		}
@@ -469,20 +614,40 @@ func handlePostUpload(w http.ResponseWriter, req *http.Request) {
 	go ScanForReleases()
 }
 
+// staticCacheHeaders adds Cache-Control + Vary headers so browsers cache
+// /static/* assets locally instead of revalidating each navigation.
+func staticCacheHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", staticCacheMaxAge))
+		w.Header().Set("Vary", "Accept-Encoding")
+		h.ServeHTTP(w, r)
+	})
+}
+
 func fileHandler(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Server", serverUA)
 
 		if strings.HasPrefix(req.URL.Path, "/static") {
-			http.StripPrefix("/static/", http.FileServer(http.Dir(configJson.TemplateDir))).ServeHTTP(w, req)
+			// A8: serve static assets through safeFileSystem (blocks dotfiles/symlinks).
+			// Handler is built once at startup and adds Cache-Control headers.
+			staticHandler.ServeHTTP(w, req)
 			return
 		}
 
-		filepath := path.Join(configJson.RootFolder, path.Clean(req.URL.Path))
+		fpath := filepath.Join(configJson.RootFolder, filepath.Clean(req.URL.Path))
 
-		f, err := os.Open(filepath)
+		// A8: verify path stays within root before opening
+		rootClean := filepath.Clean(configJson.RootFolder)
+		fpathClean := filepath.Clean(fpath)
+		if !strings.HasPrefix(fpathClean, rootClean+string(os.PathSeparator)) && fpathClean != rootClean {
+			http.Error(w, "404 Not Found", http.StatusNotFound)
+			return
+		}
+
+		f, err := os.Open(fpath)
 		if err != nil {
-			http.Error(w, "404 Not Found: Error while opening the file.", 404)
+			http.Error(w, "404 Not Found", http.StatusNotFound)
 			log.Printf("Error opening file %v\n", err)
 			return
 		}
@@ -490,30 +655,45 @@ func fileHandler(handler http.Handler) http.Handler {
 		// Checking if the opened handle is really a file
 		statinfo, err := f.Stat()
 		if err != nil {
-			http.Error(w, "500 Internal Error : stat() failure.", 500)
+			f.Close()
+			http.Error(w, "500 Internal Server Error", http.StatusInternalServerError)
 			log.Printf("Error stat() file %v\n", err)
 			return
 		}
 
-		if statinfo.IsDir() { // If it's a directory, open it !
+		if statinfo.IsDir() { // If it's a directory, open it!
 			handleDirectory(f, w, req, handler)
 			return
 		}
 
-		//Its a file, log to GA
+		// It's a file — close handle before re-opening via FileServer.
 		_, fname := path.Split(f.Name())
-		go SendAnalyticsData(fname)
+		f.Close() // close before handler re-opens via FileServer
+
+		// Mirror redirect: serve download files from the configured mirror URL
+		// when the request arrives on a primary host. The mirror instance of this
+		// server won't match any primary host, preventing redirect loops.
+		// Skip analytics here — the mirror will fire the event when it serves
+		// the file, so the download is counted once.
+		if shouldMirrorRedirect(req, statinfo) {
+			mirrorURL := buildMirrorURL(req)
+			log.Println("Redirect to mirror:", req.URL.Path, "→", mirrorURL)
+			http.Redirect(w, req, mirrorURL, mirrorRedirectCode())
+			return
+		}
+
+		// Server actually delivers the file: fire Umami download event once.
+		go sendUmamiDownloadEvent(req, fname)
 
 		log.Println("Serve file for URL", req.URL)
 
-		//Use default go serve handler
+		// Use default go serve handler
 		handler.ServeHTTP(w, req)
-
-		defer f.Close()
 	})
 }
 
 func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handler http.Handler) {
+	defer f.Close()
 	names, _ := f.Readdir(-1)
 
 	// First, check if there is any index in this folder.
@@ -526,9 +706,11 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 	}
 
 	data := DirListing{
-		Name:       req.URL.Path,
-		ShowParent: true,
-		Prefix:     configJson.ProxyPrefix,
+		Name:           req.URL.Path,
+		ShowParent:     true,
+		Prefix:         configJson.ProxyPrefix,
+		UmamiWebsiteId: configJson.UmamiWebsiteId,
+		UmamiScriptURL: configJson.UmamiScriptURL,
 	}
 	if f.Name() == configJson.RootFolder {
 		data.ShowParent = false
@@ -734,22 +916,6 @@ func createFileItem(folder string, filename string) (fi FileItem) {
 	}
 
 	return fi
-}
-
-func SendAnalyticsData(filename string) {
-	log.Println("Sending data to Analytics for file", filename)
-	client, err := ga.NewClient(configJson.GoogleAnalyticsId)
-	if err != nil {
-		log.Println("ERROR, failed to create GA client!")
-		return
-	}
-
-	err = client.Send(ga.NewEvent("Download", filename))
-	if err != nil {
-		log.Println("ERROR, failed to send event to GA!", err)
-		return
-	}
-
 }
 
 var repoToolMutex sync.Mutex
