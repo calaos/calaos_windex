@@ -284,23 +284,29 @@ func logHandler(handler http.Handler) http.Handler {
 }
 
 // safePath joins root + components and verifies the result stays under root.
-// Returns an error for path traversal attempts or invalid components.
+// Components may themselves contain "/" separators (e.g. "stable/calaos_installer/flatpak");
+// each segment is validated individually. Returns an error for path traversal
+// attempts or invalid segments.
 func safePath(root string, components ...string) (string, error) {
+	var segments []string
 	for _, c := range components {
-		// Reject any component that contains a path separator or is ".."
-		if strings.Contains(c, "/") || strings.Contains(c, "\\") || c == ".." || c == "." {
-			return "", fmt.Errorf("invalid path component: %q", c)
-		}
-		if c == "" {
-			continue
-		}
-		// Reject dotfiles
-		if strings.HasPrefix(c, ".") {
-			return "", fmt.Errorf("dotfile components are not allowed: %q", c)
+		// Normalise separators then split on "/".
+		c = strings.ReplaceAll(c, "\\", "/")
+		for _, seg := range strings.Split(c, "/") {
+			if seg == "" {
+				continue
+			}
+			if seg == ".." || seg == "." {
+				return "", fmt.Errorf("invalid path component: %q", seg)
+			}
+			if strings.HasPrefix(seg, ".") {
+				return "", fmt.Errorf("dotfile components are not allowed: %q", seg)
+			}
+			segments = append(segments, seg)
 		}
 	}
 
-	parts := append([]string{root}, components...)
+	parts := append([]string{root}, segments...)
 	dest := filepath.Join(parts...)
 	dest = filepath.Clean(dest)
 
