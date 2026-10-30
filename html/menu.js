@@ -1,0 +1,10 @@
+(()=>{const n=document.getElementById("nav"),b=n.querySelector(".burger");
+const cl=f=>{n.classList.remove("open");b.setAttribute("aria-expanded","false");if(f)b.focus()};
+b.onclick=()=>{const o=n.classList.toggle("open");b.setAttribute("aria-expanded",o);if(o)n.querySelector(".drawer a").focus();else b.focus()};
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&n.classList.contains("open"))cl(true);
+if(e.key==="Tab"&&n.classList.contains("open")){const f=[b,...n.querySelectorAll(".drawer a")],i=f.indexOf(document.activeElement);
+if(e.shiftKey&&i<=0){e.preventDefault();f[f.length-1].focus()}else if(!e.shiftKey&&i===f.length-1){e.preventDefault();f[0].focus()}}});
+const sc=()=>n.classList.toggle("sc",scrollY>8);addEventListener("scroll",sc,{passive:true});sc();
+matchMedia("(min-width:1300px)").addEventListener("change",e=>{if(e.matches)cl(false)});
+n.querySelector(".drawer").addEventListener("click",e=>{if(e.target.closest("a"))cl(true)});
+})();

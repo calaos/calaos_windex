@@ -24,7 +24,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/dustin/go-humanize"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -121,6 +120,7 @@ type DirListing struct {
 	Breadcrumbs    []Breadcrumb
 	UmamiWebsiteId string
 	UmamiScriptURL string
+	T              *Locale
 }
 
 type ByCase []FileItem
@@ -631,6 +631,9 @@ func staticCacheHeaders(h http.Handler) http.Handler {
 	})
 }
 
+// A variable so that tests do not race with the goroutine it runs in.
+var downloadEvent = sendUmamiDownloadEvent
+
 func fileHandler(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Server", serverUA)
@@ -690,13 +693,13 @@ func fileHandler(handler http.Handler) http.Handler {
 		}
 
 		// Server actually delivers the file: fire Umami download event once.
-		go sendUmamiDownloadEvent(req, fname)
+		go downloadEvent(req, fname)
 
 		log.Println("Serve file for URL", req.URL)
 
 		// Use default go serve handler
 		if wantsHTMLPage(req) {
-			handler.ServeHTTP(&errorPageWriter{ResponseWriter: w}, req)
+			handler.ServeHTTP(&errorPageWriter{ResponseWriter: w, req: req}, req)
 			return
 		}
 		handler.ServeHTTP(w, req)
@@ -716,12 +719,14 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 		}
 	}
 
+	locale := negotiateLocale(req)
 	data := DirListing{
 		Name:           req.URL.Path,
 		ShowParent:     true,
 		Prefix:         configJson.ProxyPrefix,
 		UmamiWebsiteId: configJson.UmamiWebsiteId,
 		UmamiScriptURL: configJson.UmamiScriptURL,
+		T:              locale,
 	}
 	if f.Name() == configJson.RootFolder {
 		data.ShowParent = false
@@ -738,7 +743,7 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 		bpath = "/" + configJson.ProxyPrefix
 	} else {
 		data.Breadcrumbs = append(data.Breadcrumbs, Breadcrumb{
-			Name: "Root",
+			Name: locale.Root,
 			Path: "/",
 		})
 		p = strings.Trim(req.URL.Path, "/")
@@ -786,7 +791,7 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 	//prepare file info
 	data.Files = make([]FileItem, files_tmp.Len())
 	for i, e := 0, files_tmp.Front(); e != nil; i, e = i+1, e.Next() {
-		data.Files[i] = createFileItem(f.Name(), e.Value.(string))
+		data.Files[i] = createFileItem(f.Name(), e.Value.(string), locale)
 	}
 	sort.Sort(ByCreationTime(data.Files))
 
@@ -797,10 +802,11 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 		return
 	}
 
+	w.Header().Add("Vary", "Accept-Language")
 	t.Execute(w, data)
 }
 
-func createFileItem(folder string, filename string) (fi FileItem) {
+func createFileItem(folder string, filename string, locale *Locale) (fi FileItem) {
 	fi = FileItem{
 		Name:   filename,
 		Prefix: configJson.ProxyPrefix,
@@ -819,8 +825,8 @@ func createFileItem(folder string, filename string) (fi FileItem) {
 		return fi
 	}
 
-	fi.Size = humanize.Bytes(uint64(fs.Size()))
-	fi.ModifiedDate = humanize.Time(fs.ModTime())
+	fi.Size = locale.FormatSize(uint64(fs.Size()))
+	fi.ModifiedDate = locale.FormatAge(fs.ModTime())
 	fi.CreatedTime = fs.ModTime()
 
 	//Icon, find by checking extension

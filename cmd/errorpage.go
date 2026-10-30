@@ -5,8 +5,10 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -15,51 +17,75 @@ type ErrorPage struct {
 	Status  string
 	Message string
 	Prefix  string
-}
-
-var errorMessages = map[int]string{
-	http.StatusNotFound:            "The file or folder you are looking for does not exist or is not available.",
-	http.StatusForbidden:           "You are not allowed to access this resource.",
-	http.StatusInternalServerError: "Something went wrong on our side. Please try again later.",
+	T       *Locale
 }
 
 // wantsHTMLPage is true only for browser navigations. Every other client
-// (curl, CI, API consumers) keeps the plain-text error body.
+// (curl, CI, API consumers) keeps the plain-text error body, and so do Range
+// and precondition requests, which only download clients send.
 func wantsHTMLPage(req *http.Request) bool {
-	return req.Method == http.MethodGet && strings.Contains(req.Header.Get("Accept"), "text/html")
+	if req.Method != http.MethodGet {
+		return false
+	}
+	for _, name := range []string{"Range", "If-Match", "If-Unmodified-Since"} {
+		if req.Header.Get(name) != "" {
+			return false
+		}
+	}
+	for _, part := range strings.Split(req.Header.Get("Accept"), ",") {
+		mediaType, params, err := mime.ParseMediaType(part)
+		if err != nil || mediaType != "text/html" {
+			continue
+		}
+		q := params["q"]
+		if q == "" {
+			return true
+		}
+		weight, err := strconv.ParseFloat(q, 64)
+		return err == nil && weight > 0
+	}
+	return false
 }
 
 // writeError sends the themed HTML error page to browser navigations and the
 // historical text body to everyone else.
 func writeError(w http.ResponseWriter, req *http.Request, code int, text string) {
-	if wantsHTMLPage(req) && renderErrorPage(w, code) {
+	if wantsHTMLPage(req) && renderErrorPage(w, req, code) {
 		return
 	}
 	http.Error(w, text, code)
 }
 
-func renderErrorPage(w http.ResponseWriter, code int) bool {
+// renderErrorPage leaves the response headers alone until the page is rendered,
+// so that a failure falls back on the text error exactly as it was emitted.
+func renderErrorPage(w http.ResponseWriter, req *http.Request, code int) bool {
 	t, err := template.ParseFiles(path.Join(configJson.TemplateDir, "index.tmpl"))
 	if err != nil {
 		return false
 	}
-	msg, ok := errorMessages[code]
+	locale := negotiateLocale(req)
+	text, ok := locale.Errors[code]
 	if !ok {
-		msg = "The request could not be completed."
+		text = locale.DefaultError
 	}
 	var buf bytes.Buffer
 	err = t.ExecuteTemplate(&buf, "error", ErrorPage{
 		Code:    code,
-		Status:  http.StatusText(code),
-		Message: msg,
+		Status:  text.Status,
+		Message: text.Message,
 		Prefix:  configJson.ProxyPrefix,
+		T:       locale,
 	})
 	if err != nil {
 		log.Printf("Error rendering error page: %v\n", err)
 		return false
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	h := w.Header()
+	h.Set("Content-Length", strconv.Itoa(buf.Len()))
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Add("Vary", "Accept")
+	h.Add("Vary", "Accept-Language")
 	w.WriteHeader(code)
 	w.Write(buf.Bytes())
 	return true
@@ -69,19 +95,14 @@ func renderErrorPage(w http.ResponseWriter, code int) bool {
 // HTML page when the client is a browser navigation.
 type errorPageWriter struct {
 	http.ResponseWriter
+	req     *http.Request
 	swapped bool
 }
 
 func (e *errorPageWriter) WriteHeader(code int) {
-	if code >= 400 && !e.swapped {
-		h := e.ResponseWriter.Header()
-		for _, k := range []string{"Content-Type", "Content-Length", "X-Content-Type-Options"} {
-			h.Del(k)
-		}
-		if renderErrorPage(e.ResponseWriter, code) {
-			e.swapped = true
-			return
-		}
+	if code >= 400 && !e.swapped && renderErrorPage(e.ResponseWriter, e.req, code) {
+		e.swapped = true
+		return
 	}
 	e.ResponseWriter.WriteHeader(code)
 }
