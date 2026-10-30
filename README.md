@@ -1,4 +1,4 @@
 # calaos_windex
-HTTP Download server wich gather push statistics to Google Analytics for every file download
+HTTP Download server wich reports every file download to Umami (optional)
 
 Written in Go

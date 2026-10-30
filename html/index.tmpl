@@ -1,309 +1,115 @@
+{{- define "head" -}}
+<script>document.documentElement.classList.add("js")</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" {{ if .Prefix }}href="/{{ .Prefix }}/static/favicon.png"{{ else }}href="/static/favicon.png"{{ end }} type="image/png">
+<link rel="preload" {{ if .Prefix }}href="/{{ .Prefix }}/static/fonts/manrope/manrope-latin.woff2"{{ else }}href="/static/fonts/manrope/manrope-latin.woff2"{{ end }} as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" {{ if .Prefix }}href="/{{ .Prefix }}/static/style.css"{{ else }}href="/static/style.css"{{ end }}>
+{{- end -}}
+
+{{- define "nav" -}}
+<a class="skip" href="#main">{{ .T.SkipToContent }}</a>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<linearGradient id="lg-wm" gradientUnits="userSpaceOnUse" x1="0" y1="54" x2="0" y2="102"><stop offset=".5" stop-color="#8cd3e7"/><stop offset=".5" stop-color="#3ab4d7"/></linearGradient>
+<linearGradient id="lg-sd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3ab4d7" stop-opacity=".28"/><stop offset="1" stop-color="#3ab4d7" stop-opacity=".1"/></linearGradient>
+</defs></svg>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5A11.5 11.5.0 008.4 22.9c.6.1.8-.3.8-.6v-2.1c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7.0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1.0.0 1-.3 3.2 1.2a11 11 0 015.8.0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1.0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.5 11.5.0 0012 .5z"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+</svg>
+<header class="nav" id="nav"><div class="wrap">
+<a class="logo" href="{{ .T.Home }}" aria-label="{{ .T.LogoHome }}"><svg viewBox="868 32 562 88" fill="currentColor" aria-label="Calaos"><g transform="translate(416,6)" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="455.95" y="46.54" width="76.86" height="53.31" rx="6.5" fill="url(#lg-sd)" stroke="none"/><path stroke-width="3.3" d="M515.00501 99.849613h11.24184C529.89218 99.849613 532.8104 96.968373 532.8104 93.38627V53.002911C532.8104 49.420808 529.89218 46.539567 526.24685 46.539567H462.51529C458.86996 46.539567 455.95174 49.420808 455.95174 53.002911V93.38627C455.95174 96.968373 458.86994 99.849613 462.51529 99.849613h15.37967"/><path stroke-width="2" d="M471.15794 51.902587v5.352221m0 8.028319V70.635339M480.43925 61.268963H475.13564m-7.9554.0H461.87665m15.80173-6.665602L475.82937 56.493535M466.48653 66.044338l-1.84902 1.890173M477.76297 67.849139 475.88998 65.983189M466.4259 56.554702 464.55292 54.68876"/><path fill="currentColor" stroke="none" d="M480.19696 107.09215C480.42887 107.37415 480.67984 107.64127 480.94495 107.90932 483.03893 110.02661 485.60633 111.08098 488.61613 111.08408L502.21775 110.89523C505.20067 110.92547 507.73577 109.87921 509.86095 107.7392 511.98609 105.59916 515.41183 103.23744 515.38803 100.22745L515.40772 84.117204C515.40909 82.761413 514.9358 81.600136 513.99621 80.650011 513.05661 79.700001 511.92778 79.223527 510.58414 79.222076 509.26735 79.19366 508.11649 79.67122 507.14806 80.646361 506.93286 80.863112 506.75794 81.088534 506.62337 81.33241 506.43549 81.088196 506.22818 80.857308 506.01343 80.640076 505.07381 79.690075 503.94498 79.213592 502.60132 79.212168 501.25766 79.210788 500.10681 79.688392 499.16528 80.636444 498.95005 80.853186 498.76189 81.085534 498.60035 81.356491 498.43939 81.085196 498.24535 80.847382 498.0306 80.63015 497.091 79.68014 495.98231 79.210147 494.69239 79.208732 493.42939 79.180387 492.34124 79.572655 491.42669 80.385178L491.43537 69.982646C491.43675 68.626855 490.96347 67.465596 490.02388 66.515461 489.08426 65.565452 487.95547 65.088978 486.61178 65.0875 485.29503 65.059093 484.15743 65.529727 483.21589 66.477778 482.27436 67.425963 481.80215 68.564985 481.80079 69.920758L481.77879 87.345337C480.75746 87.507001 478.60566 89.022079 477.90619 89.726334 476.93776 90.701573 476.48244 91.860883 476.50793 93.189593L477.78351 100.15637C477.7808 102.81381 478.57356 105.11815 480.19696 107.09215zM481.49923 106.02407C480.12242 104.35285 479.41616 102.4184 479.41844 100.18802L478.14288 93.22124C478.17068 92.326469 478.50343 91.564688 479.12215 90.941612 479.74088 90.31859 481.76282 88.844124 482.63 88.903983 483.48063 88.962657 483.41791 88.616717 483.44029 87.285425 483.46208 85.988202 483.45257 69.972711 483.45257 69.972711 483.48036 69.077949 483.81311 68.316168 484.43184 67.693074 485.05056 67.070079 485.77425 66.759943 486.63421 66.760798 487.49415 66.761741 488.24222 67.084118 488.85967 67.708404 489.47713 68.332761 489.78447 69.063055 489.78357 69.930701L489.77436 92.14489 491.45916 92.030719 491.42559 84.046894C491.42647 83.179203 491.72589 82.441325 492.34461 81.818276 492.96332 81.195263 493.73083 80.901792 494.61761 80.929772 495.50445 80.903626 496.24896 81.198824 496.86642 81.823119 497.48386 82.447494 497.79121 83.177743 497.79034 84.045434L497.81577 90.049992 499.20392 90.070548 499.40841 84.05682C499.40927 83.189129 499.70869 82.451269 500.32742 81.828202 500.94614 81.205207 501.69678 80.891457 502.58356 80.919445 503.47042 80.893299 504.23177 81.208732 504.84921 81.833045 505.46667 82.45742 505.77401 83.187669 505.77312 84.055342L505.67898 89.286627 507.38147 89.471357 507.42492 84.107278C507.42585 83.185355 507.71838 82.434123 508.3102 81.838146 508.92894 81.215133 509.67957 80.901392 510.56637 80.929371 511.45321 80.903225 512.21455 81.218676 512.83204 81.842971 513.44944 82.467346 513.75681 83.197577 513.75594 84.065268L513.7461 92.120391 513.73627 100.17553C513.70675 102.7516 510.44054 104.71902 508.6651 106.50691 506.86272 108.32186 504.70136 109.24163 502.17528 109.23898L488.57364 109.42784C486.04754 109.4252 483.89783 108.5282 482.12598 106.73665 481.90119 106.50929 481.69589 106.2628 481.49923 106.02407z"/></g><path d="M1048 66.094482v-12H964V102.09448h84v-12H976V66.094482h72m90 35.999998V54.094482h-84v12h72V90.09448h-60v-6h54V72.094482h-66V102.09448h84m18-65.999998h-12V102.09448h12V36.094482M1246.0469 102.09448V54.094482h-84v12h72V90.09448h-60v-6h54V72.094482h-66V102.09448h84m6-47.999998V102.09448h84V54.094482h-84m72 35.999998h-60V66.094482h60V90.09448m18-35.999998v12h84v-12h-84m0 29.999998h72v6h-72v12h84V72.094482h-84V84.09448"/></svg></a>
+<nav class="menu" aria-label="{{ .T.NavMain }}">
+{{- range .T.Menu -}}
+{{- if .Button }}<a class="btn btn-p" href="{{ .URL }}">{{ .Name }}</a>
+{{- else if .Icon }}<a class="menu-gh" href="{{ .URL }}" aria-label="{{ $.T.NavGithub }}"><svg class="ic" aria-hidden="true"><use href="#i-github"/></svg></a>
+{{- else }}<a href="{{ .URL }}">{{ .Name }}</a>
+{{- end -}}
+{{- end -}}
+</nav>
+<button class="burger" aria-expanded="false" aria-controls="drawer" aria-label="{{ .T.NavBurger }}"><svg class="ic" aria-hidden="true"><use href="#i-menu"/></svg></button>
+</div><nav class="drawer" id="drawer" aria-label="{{ .T.NavMobile }}">
+{{- range .T.Menu -}}
+{{- if .Button }}<a class="btn btn-p" href="{{ .URL }}">{{ .Name }}</a>
+{{- else if .Icon }}<a href="{{ .URL }}"><svg class="ic" aria-hidden="true"><use href="#i-github"/></svg>{{ .Name }}</a>
+{{- else }}<a href="{{ .URL }}">{{ .Name }}</a>
+{{- end -}}
+{{- end -}}
+</nav></header>
+{{- end -}}
+
+{{- define "foot" -}}
+<footer><div class="wrap"><span class="lbl">{{ .T.Language }}</span><div class="lang"><a href="https://calaos.fr/fr/" hreflang="fr" lang="fr"{{ if eq .T.Lang "fr" }} aria-current="true"{{ end }}>FR</a><a href="https://calaos.fr/en/" hreflang="en" lang="en"{{ if eq .T.Lang "en" }} aria-current="true"{{ end }}>EN</a></div></div></footer>
+<script {{ if .Prefix }}src="/{{ .Prefix }}/static/menu.js"{{ else }}src="/static/menu.js"{{ end }}></script>
+{{- end -}}
+
+{{- define "error" -}}
 <!DOCTYPE html>
-<html>
+<html lang="{{ .T.Lang }}">
 <head>
-{{ if .Prefix }}
-  <title>Index of /{{ .Prefix }}{{ .Name }}</title>
-{{ else }}
-  <title>Index of {{ .Name }}</title>
-{{ end }}
-  <style type="text/css">
-  /*------------------------------------*\
-    Apaxy
-    by @adamwhitcroft
-    Theme name: Apaxy
-    Theme author: @adamwhitcroft
-\*------------------------------------*/
-@import url('//fonts.googleapis.com/css?family=Open+Sans');
-/* Have to use @import for the font, as you can only specify a single stylesheet */
-* {
-	margin:0;
-	padding:0;
-	-webkit-box-sizing:border-box;
-	   -moz-box-sizing:border-box;
-	       box-sizing: border-box;
-}
-
-html {
-	min-height:100%;
-	color:#61666c;
-	font-weight:400;
-	font-size:1em;
-	font-family:'Open Sans', sans-serif;
-	line-height:2em;
-}
-body {
-	-webkit-backface-visibility:hidden;
-}
-code {
-	font-family:consolas,monospace;
-}
-a {
-	color:#61666c;
-	text-decoration:none;
-}
-a, img {
-        border:none;
-        outline:none
-}
-a:hover {
-	color:#2a2a2a;
-}
-.header {
-background: #005ea7;
-}
-.panel {
-	background: #003965;
-	max-width: 1000px;
-    margin: 0 auto;
-	margin-top: 20px;
-}
-/*------------------------------------*\
-    Wrapper
-\*------------------------------------*/
-.wrapper {
-	padding: 20px;
-	margin:0 auto;
-	padding-top:40px;
-	max-width:1000px;
-}
-/*------------------------------------*\
-    Demo block
-\*------------------------------------*/
-.block {
-	font-size:.875em;
-	margin:20px 0;
-	padding:20px;
-	color:#9099A3;
-}
-/*------------------------------------*\
-    Table (directory listing)
-\*------------------------------------*/
-table {
-	width:100%;
-	border-collapse:collapse;
-	font-size:.875em;
-}
-tr {
-	outline:0;
-	border:0;
-}
-tr:hover td {
-	background:#f6f6f6;
-}
-th {
-	text-align:left;
-	font-size:.75em;
-	padding-right:20px;
-}
-tr td:first-of-type {
-	padding-left:10px;
-	padding-right:10px;
-}
-td {
-	padding:5px 0;
-	outline:0;
-	border:0;
-	border-bottom:1px solid #edf1f5;
-	vertical-align:middle;
-	text-align:left;
-	-webkit-transition:background 300ms ease;
-	   -moz-transition:background 300ms ease;
-	    -ms-transition:background 300ms ease;
-	     -o-transition:background 300ms ease;
-	        transition:background 300ms ease;
-}
-td a{
-	display: block;
-}
-tr.parent a[href^="/"] {
-	color:#9099A3;
-}
-	.parent a[href^="/"]:hover {
-		color:#2281d0;
-	}
-/*------------------------------------*\
-    Footer
-\*------------------------------------*/
-.footer {
-	text-align:center;
-	font-size:.75em;
-}
-
-.breadcrumb {
-	font-family: 'Exo 2', sans-serif;
-    font-size: 13px;
-    font-weight: bold;
-    overflow: hidden;
-    padding: 0;
-	background: #003965;
-    color: #FFFFFF;
-    border: 1px none;
-    height: 44px;
-    width: 984px;
-  	min-width: 984px;
-}
-
-.breadcrumb .crust {
-    display: block;
-    float: left;
-    position: relative;
-}
-
-.breadcrumb .crust:first-child a.crumb {
-    padding-left: 10px;
-}
-
-.breadcrumb .crust a.crumb, .breadcrumb .crust b.lastcrumb {
-    text-decoration: none;
-    padding: 5px 5px 5px 30px;
-    margin-bottom: -1px;
-    outline: 0 none;
-    display: block;
-    color: #FFFFFF;
-    text-decoration: none;
-	background: #005ea7;
-	transition: all 0.5s ease;
-}
-
-.breadcrumb .crust b.lastcrumb {
-    background: transparent none;
-}
-
-.breadcrumb .crust a.crumb, .breadcrumb .crust b.lastcrumb {
-    line-height: 35px;
-}
-
-.breadcrumb .crust .arrow {
-    border: 22px solid transparent;
-    border-right: 1px none;
-    border-left-color: #003c6d;
-    display: block;
-    position: absolute;
-    right: -22px;
-    top: 0;
-    z-index: 1;
-    width: 0px;
-    height: 0px;
-}
-
-.breadcrumb .crust .arrow span {
-    border: 23px solid transparent;
-    border-right: 1px none black;
-    border-left-color: #005ea7;
-    display: block;
-    position: absolute;
-    left: -24px;
-    top: -23px;
-    z-index: 51;
-    white-space: nowrap;
-    overflow: hidden;
-    text-indent: 9999px;
-    width: 0px;
-    height: 0px;
-	transition: all 0.5s ease;
-}
-
-.breadcrumb .refresh:hover {
-    background-position: 0px -16px;
-}
-
-.breadcrumb .crust:last-child a.crumb {
-}
-
-.breadcrumb .crust:hover a.crumb {
-    text-decoration:none;
-    cursor: pointer;
-    background: #0076D1;
-	transition: all 0.5s ease;
-}
-
-.breadcrumb .crust:hover .arrow span {
-
-    border-left-color: #0076D1;
-	transition: all 0.5s ease;
-}
-  </style>
-  {{ if .UmamiWebsiteId }}
-  <script defer src="{{ .UmamiScriptURL }}" data-website-id="{{ .UmamiWebsiteId }}"></script>
-  {{ end }}
+<title>{{ .Status }} | Calaos {{ .T.Downloads }}</title>
+<meta name="robots" content="noindex">
+{{ template "head" . }}
 </head>
 <body>
-<div class="header">
-{{ if .Prefix }}
-	<img src="/{{ .Prefix }}/static/logo.png" alt="calaos" />
-{{ else }}
-	<img src="/static/logo.png" alt="calaos" />
+{{ template "nav" . }}
+<main id="main"><div class="wrap err">
+<p class="code">{{ .Code }}</p>
+<h1>{{ .Status }}</h1>
+<p>{{ .Message }}</p>
+<a class="btn btn-p" {{ if .Prefix }}href="/{{ .Prefix }}/"{{ else }}href="/"{{ end }}>{{ .T.BackDownloads }}</a>
+</div></main>
+{{ template "foot" . }}
+</body>
+</html>
+{{- end -}}
+<!DOCTYPE html>
+<html lang="{{ .T.Lang }}">
+<head>
+<title>{{ .T.IndexOf }} {{ if .Prefix }}/{{ .Prefix }}{{ end }}{{ .Name }}</title>
+{{ template "head" . }}
+{{ if .UmamiWebsiteId }}
+<script defer src="{{ .UmamiScriptURL }}" data-website-id="{{ .UmamiWebsiteId }}"></script>
 {{ end }}
+</head>
+<body>
+{{ template "nav" . }}
+<main id="main"><div class="wrap">
+<nav aria-label="{{ .T.Breadcrumb }}">
+<ol class="crumbs">
+{{- range $b := .Breadcrumbs }}
+{{- if $b.Current }}
+<li><span aria-current="page">{{ $b.Name }}</span></li>
+{{- else }}
+<li><a href="{{ $b.Path }}">{{ $b.Name }}</a></li>
+{{- end }}
+{{- end }}
+</ol>
+</nav>
+<span class="eyebrow">{{ .T.Downloads }}</span>
+<h1>{{ if .Prefix }}/{{ .Prefix }}{{ end }}{{ .Name }}</h1>
+{{ if or .Folders .Files }}
+<ul class="list">
+<li class="row head" aria-hidden="true"><span></span><span>{{ .T.Name }}</span><span class="date">{{ .T.Modified }}</span><span class="size">{{ .T.Size }}</span></li>
+{{- if .ShowParent }}
+<li class="row parent"><img {{ if .Prefix }}src="/{{ .Prefix }}/static/icons/folder-home.png"{{ else }}src="/static/icons/folder-home.png"{{ end }} alt=""><a class="name" href="../">{{ .T.ParentDir }}</a></li>
+{{- end }}
+{{- range .Folders }}
+<li class="row dir"><img {{ if .Prefix }}src="/{{ .Prefix }}/static/icons/{{ .Icon }}"{{ else }}src="/static/icons/{{ .Icon }}"{{ end }} alt="{{ $.T.Folder }}"><a class="name" href="./{{ .Name }}/">{{ .Name }}/</a></li>
+{{- end }}
+{{- range .Files }}
+<li class="row"><img {{ if .Prefix }}src="/{{ .Prefix }}/static/icons/{{ .Icon }}"{{ else }}src="/static/icons/{{ .Icon }}"{{ end }} alt="{{ $.T.File }}"><a class="name" href="./{{ .Name }}">{{ .Name }}</a><span class="date">{{ .ModifiedDate }}</span><span class="size">{{ .Size }}</span></li>
+{{- end }}
+</ul>
+{{ end }}
+{{ if not (or .Folders .Files) }}
+<div class="empty">
+<h2>{{ .T.Empty }}</h2>
+<p>{{ .T.EmptyHint }}</p>
+{{ if .ShowParent }}<a class="btn btn-p" href="../">{{ .T.BackToParent }}</a>{{ end }}
 </div>
-<div class="panel">
-
-<fieldset class="breadcrumb">
-	<span class="crumbs">
-		{{ range .Breadcrumbs }}
-		<span class="crust">
-			<a href="{{ .Path }}" class="crumb">{{ .Name }}</a>
-			<span class="arrow">
-				<span>&gt;</span>
-			</span>
-		</span>
-		{{ end }}
-	</span>
-</fieldset>
-
-</div>
-<div class="wrapper">
-
-<table>
-	<tr>
-		<th>&nbsp;</th>
-		<th>Name</th>
-		<th>Last modified</th>
-		<th>Size</th>
-	</tr>
-	{{ if .ShowParent }}
-	<tr>
-		<td valign="top">
-		{{ if .Prefix }}
-			<img src="/{{ .Prefix }}/static/icons/folder-home.png" alt="dir" />
-		{{ else }}
-			<img src="/static/icons/folder-home.png" alt="dir" />
-		{{ end }}</td>
-		<td><a href="../">Parent Directory</a></td>
-		<td>&nbsp;</td>
-		<td>&nbsp;</td>
-	</tr>
-	{{ end }}
-	{{ range .Folders }}
-	<tr>
-		<td valign="top">
-		{{ if .Prefix }}
-			<img src="/{{ .Prefix }}/static/icons/{{ .Icon }}" alt="folder" />
-		{{ else }}
-			<img src="/static/icons/{{ .Icon }}" alt="folder" />
-		{{ end }}</td>
-		<td><a href="{{ .Name }}/">{{ .Name }}/</a></td>
-		<td align="right">&nbsp;</td>
-		<td align="right">&nbsp;</td>
-	</tr>
-	{{ end }}
-	{{ range .Files }}
-	<tr>
-		<td valign="top">
-		{{ if .Prefix }}
-			<img src="/{{ .Prefix }}/static/icons/{{ .Icon }}" alt="icon" />
-		{{ else }}
-			<img src="/static/icons/{{ .Icon }}" alt="icon" />
-		{{ end }}</td>
-		<td><a href="{{ .Name }}">{{ .Name }}</a></td>
-		<td align="right">{{ .ModifiedDate }}</td>
-		<td align="right">{{ .Size }}</td>
-	</tr>
-	{{ end }}
-</table>
-
-</div>
-<script src="//ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
-<script>
-$('tr:nth-child(2)').addClass('parent');
-</script>
-</body></html>
+{{ end }}
+</div></main>
+{{ template "foot" . }}
+</body>
+</html>
