@@ -58,7 +58,7 @@ a{color:inherit}
 
 /* contenu */
 main{flex:1;font-size:16px;line-height:1.55;padding:clamp(24px,4vw,48px) 0 clamp(40px,6vw,80px)}
-.crumbs{list-style:none;margin:0 0 20px;padding:0;display:flex;flex-wrap:wrap;gap:2px 0;font-size:14px;font-weight:600}
+.crumbs{list-style:none;margin:0 0 20px -8px;padding:0;display:flex;flex-wrap:wrap;gap:2px 0;font-size:14px;font-weight:600}
 .crumbs li{display:flex;align-items:center;min-width:0}
 .crumbs li+li::before{content:"/";color:var(--muted);padding:0 6px}
 .crumbs a,.crumbs [aria-current]{display:inline-flex;align-items:center;min-height:44px;padding:0 8px;border-radius:999px;max-width:100%;overflow-wrap:anywhere;word-break:break-word}
