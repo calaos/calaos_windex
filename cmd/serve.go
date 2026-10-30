@@ -107,8 +107,9 @@ type FileItem struct {
 }
 
 type Breadcrumb struct {
-	Name string
-	Path string
+	Name    string
+	Path    string
+	Current bool
 }
 
 type DirListing struct {
@@ -647,13 +648,13 @@ func fileHandler(handler http.Handler) http.Handler {
 		rootClean := filepath.Clean(configJson.RootFolder)
 		fpathClean := filepath.Clean(fpath)
 		if !strings.HasPrefix(fpathClean, rootClean+string(os.PathSeparator)) && fpathClean != rootClean {
-			http.Error(w, "404 Not Found", http.StatusNotFound)
+			writeError(w, req, http.StatusNotFound, "404 Not Found")
 			return
 		}
 
 		f, err := os.Open(fpath)
 		if err != nil {
-			http.Error(w, "404 Not Found", http.StatusNotFound)
+			writeError(w, req, http.StatusNotFound, "404 Not Found")
 			log.Printf("Error opening file %v\n", err)
 			return
 		}
@@ -662,7 +663,7 @@ func fileHandler(handler http.Handler) http.Handler {
 		statinfo, err := f.Stat()
 		if err != nil {
 			f.Close()
-			http.Error(w, "500 Internal Server Error", http.StatusInternalServerError)
+			writeError(w, req, http.StatusInternalServerError, "500 Internal Server Error")
 			log.Printf("Error stat() file %v\n", err)
 			return
 		}
@@ -694,6 +695,10 @@ func fileHandler(handler http.Handler) http.Handler {
 		log.Println("Serve file for URL", req.URL)
 
 		// Use default go serve handler
+		if wantsHTMLPage(req) {
+			handler.ServeHTTP(&errorPageWriter{ResponseWriter: w}, req)
+			return
+		}
 		handler.ServeHTTP(w, req)
 	})
 }
@@ -749,6 +754,8 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 		}
 	}
 
+	data.Breadcrumbs[len(data.Breadcrumbs)-1].Current = true
+
 	// Otherwise, generate folder content.
 	dir_tmp := list.New()
 	files_tmp := list.New()
@@ -785,7 +792,7 @@ func handleDirectory(f *os.File, w http.ResponseWriter, req *http.Request, handl
 
 	t, err := template.ParseFiles(path.Join(configJson.TemplateDir, "index.tmpl"))
 	if err != nil {
-		http.Error(w, "500 Internal Error : Error while generating directory listing. ", 500)
+		writeError(w, req, 500, "500 Internal Error : Error while generating directory listing. ")
 		log.Printf("Error parsing template file %v\n", err)
 		return
 	}
